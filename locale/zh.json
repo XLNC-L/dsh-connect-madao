@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-connect-madao",
+    "description": "把华为云码道（CodeArts Agent）的模型接入 DSH：自签 SDK-HMAC-SHA256、P-256 密钥协商与 SM4-GCM 载荷加密，对外提供 OpenAI 兼容接口，并带设置面板与状态胶囊。"
+  }
+}

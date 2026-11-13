@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+
+# 构建与打包产物（lib/ 是发布产物，但要提交，见下）
+dist/
+*.tgz
+
+# 抓包与调试（含真实请求，绝不能进仓库）
+capture/
+*.jsonl
+_probe*.mts
+_verify*.mts
+_dpapi*.mts
+_claim.mts
+_p.mts
+
+# 本机凭证与日志
+*.enc
+credentials*.json
+*.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

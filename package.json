@@ -1,0 +1,80 @@
+{
+  "name": "dsh-connect-madao",
+  "displayName": "DSH Connect 码道",
+  "description": "把华为云码道（CodeArts Agent）的模型接入 DeepSeek Harness：自签 SDK-HMAC-SHA256、P-256 密钥协商与 SM4-GCM 载荷加密，对外提供 OpenAI 兼容接口，并带设置面板与状态胶囊。",
+  "version": "0.6.1",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "dsh-connect-madao": "lib/bin.js"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "icon": "icons/dsh-connect-madao-128.png",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "icons",
+    "locale",
+    "cordis.patch.yml",
+    "README.md",
+    "INSTALL.md",
+    "FAQ.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings-plugins",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "serve": "node --experimental-strip-types src/bin.ts serve",
+    "doctor": "node --experimental-strip-types src/bin.ts doctor",
+    "models": "node --experimental-strip-types src/bin.ts models",
+    "e2e": "node --experimental-strip-types e2e.ts",
+    "test": "node --test --experimental-strip-types tests/*.spec.ts"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "huawei",
+    "codearts",
+    "madao",
+    "model-provider"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XLNC-L/dsh-connect-madao.git"
+  },
+  "homepage": "https://github.com/XLNC-L/dsh-connect-madao#readme",
+  "bugs": {
+    "url": "https://github.com/XLNC-L/dsh-connect-madao/issues"
+  },
+  "author": "XLNC-L",
+  "publishConfig": {
+    "access": "public"
+  }
+}

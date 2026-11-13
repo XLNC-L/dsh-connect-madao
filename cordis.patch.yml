@@ -1,0 +1,90 @@
+# 由 dsh-connect-madao 自动生成，请勿手工编辑。
+# 模型清单在插件启动时从码道网关拉取；上游上新或调价后重启 DSH 即自动同步。
+# 想强制刷新：删除本文件后重启，或运行 `dsh-connect-madao models --write`。
+- insert:
+    - id: dsh-connect-madao
+      name: dsh-connect-madao
+- id: llm-pi-ai
+  config:
+    providers:
+      madao:
+        displayName: '码道 CodeArts'
+        api: openai-completions
+        baseURL: http://127.0.0.1:8765/v1
+        headers:
+          Authorization: 'Bearer bridge-local'
+        models:
+          - id: 'GLM-5.2'
+            name: 'GLM-5.2 · 0.7x'
+            contextWindow: 202752
+            maxTokens: 65536
+            input: [ text ]
+            reasoningEfforts:
+              off: null
+              low: 'low'
+              high: 'high'
+              max: 'max'
+          - id: 'openpangu-2.0-flash'
+            name: 'OpenPangu-2.0-Flash · 0.32x'
+            contextWindow: 524288
+            maxTokens: 65535
+            input: [ text ]
+            reasoningEfforts: false
+          - id: 'openpangu-2.0-pro'
+            name: 'OpenPangu-2.0-Pro · 0.7x'
+            contextWindow: 524288
+            maxTokens: 65535
+            input: [ text ]
+            reasoningEfforts: false
+          - id: 'glm-5.3'
+            name: 'GLM-5.3 · 0.79x'
+            contextWindow: 1048576
+            maxTokens: 65536
+            input: [ text ]
+            reasoningEfforts: false
+          - id: 'glm-5.3-flash'
+            name: 'GLM-5.3-Flash · 0.08x'
+            contextWindow: 1048576
+            maxTokens: 65536
+            input: [ text, image ]
+            reasoningEfforts: false
+          - id: 'glm-5.2-sft-harmony'
+            name: 'GLM-5.2-ArkTS-SPARK · 0.7x'
+            contextWindow: 202752
+            maxTokens: 65535
+            input: [ text ]
+            reasoningEfforts:
+              off: null
+              low: 'low'
+              high: 'high'
+              max: 'max'
+          - id: 'deepseek-v4.1-flash'
+            name: 'DeepSeek-V4.1-Flash · 0.18x'
+            contextWindow: 1048576
+            maxTokens: 65536
+            input: [ text, image ]
+            reasoningEfforts: false
+          - id: 'deepseek-v4.1-flash-1017'
+            name: 'DeepSeek-V4.1-Flash-1017 · 0.18x'
+            contextWindow: 1048576
+            maxTokens: 65536
+            input: [ text, image ]
+            reasoningEfforts: false
+          - id: 'kimi-k3'
+            name: 'Kimi-K3 · 2.38x'
+            contextWindow: 1048576
+            maxTokens: 65536
+            input: [ text, image ]
+            reasoningEfforts: false
+          - id: 'kimi-k3.1-pro'
+            name: 'Kimi-K3.1-Pro · 1.63x'
+            contextWindow: 1048576
+            maxTokens: 65536
+            input: [ text, image ]
+            reasoningEfforts: false
+          - id: 'speed'
+            name: '智速模式 · 0.18x'
+            contextWindow: 1048576
+            maxTokens: 65536
+            input: [ text ]
+            reasoningEfforts: false

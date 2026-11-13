@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-connect-madao",
+    "description": "Bring Huawei Cloud CodeArts Agent models into DSH: SDK-HMAC-SHA256 signing, P-256 key exchange and SM4-GCM payload encryption, exposing an OpenAI-compatible endpoint with a settings panel and status chip."
+  }
+}
