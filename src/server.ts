@@ -899,6 +899,67 @@ export async function claimCheckin(client: MadaoClient): Promise<CheckinState> {
   }
 }
 
+/**
+ * 领取**所有**当前可领的签到类活动。
+ *
+ * 为什么需要它：码道的福利不只是「每日签到领100积分」（campaignId=34），
+ * 还有按活动上线的签到礼（实测见过 campaignId=40「Skill创新赛每日签到礼」
+ * 每天 1000 积分，额度是前者十倍）。只盯 34 的话，大头的那个天天漏。
+ *
+ * 只领 MANUAL_CLAIM 且 claimable 的：AUTO_GRANT 是自动发放的，去 claim 反而错；
+ * ENTRY 类（比如要报名/认证）不是我们能替用户做的，跳过。
+ */
+export async function claimAllCheckins(client: MadaoClient): Promise<{
+  ok: boolean
+  claimed: Array<{ campaignId: number; title: string; amount: number }>
+  skipped: Array<{ campaignId: number; title: string; reason: string }>
+}> {
+  const d = (await client.getJson('/v1/ops/delivery?channel=IDE')) as any
+  const items: any[] = d?.data?.items ?? []
+  const claimed: Array<{ campaignId: number; title: string; amount: number }> = []
+  const skipped: Array<{ campaignId: number; title: string; reason: string }> = []
+
+  for (const it of items) {
+    const id = Number(it?.campaignId)
+    const title = String(it?.title ?? `campaign=${id}`)
+    const mode = it?.extra?.triggerMode
+    if (!Number.isFinite(id)) continue
+
+    // 自动发放的不用管；报名/认证类不该替用户做
+    if (mode === 'AUTO_GRANT') {
+      skipped.push({ campaignId: id, title, reason: '自动发放，无需领取' })
+      continue
+    }
+    if (!it?.claimable) {
+      skipped.push({ campaignId: id, title, reason: `当前不可领（status=${it?.status ?? 'null'}）` })
+      continue
+    }
+
+    try {
+      const r = (await client.postJson('/v1/ops/claim', {
+        campaignId: id,
+        idempotentKey: randomUUID(),
+        channel: 'IDE',
+      })) as any
+      const ok = r?.code === 0
+      chatLog(`claimAll ${ok ? 'OK' : 'FAIL'} campaign=${id} ${JSON.stringify(r?.data ?? r).slice(0, 160)}`)
+      if (ok) {
+        claimed.push({
+          campaignId: id,
+          title,
+          amount: Number(r?.data?.totalAmount ?? it?.pendingTotalAmount ?? it?.benefitAmount ?? 0),
+        })
+      } else {
+        skipped.push({ campaignId: id, title, reason: String(r?.message ?? '领取失败') })
+      }
+    } catch (e) {
+      skipped.push({ campaignId: id, title, reason: String((e as Error)?.message ?? e) })
+    }
+  }
+
+  return { ok: true, claimed, skipped }
+}
+
 /** 读积分额度。失败返回 null，不影响其它诊断项。 */
 export async function queryCredit(client: MadaoClient): Promise<CreditInfo | null> {
   try {

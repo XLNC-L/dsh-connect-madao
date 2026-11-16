@@ -22,6 +22,14 @@ export interface UsageInfo {
   total_tokens: number
   /** 输入中命中前缀缓存的 token 数；上游不给时为 undefined */
   cached_tokens?: number
+  /**
+   * OpenAI 标准位置：`prompt_tokens_details.cached_tokens`。
+   *
+   * 我们的 usage 是从上游挑字段重组的，所以要按标准形状再摆一遍 ——
+   * 顶层 `cached_tokens` 虽然也有客户端认（pi-ai 就认），但标准位置
+   * 兼容面更广，两个都带没有坏处。
+   */
+  prompt_tokens_details?: { cached_tokens: number }
 }
 
 export interface OpenAIDelta {
@@ -115,7 +123,11 @@ export function pickUsage(raw: any): UsageInfo {
     u.cached_tokens ??
     u.cache_read_input_tokens ??
     undefined
-  if (cached != null && Number.isFinite(Number(cached))) usage.cached_tokens = Number(cached)
+  if (cached != null && Number.isFinite(Number(cached))) {
+    const n = Number(cached)
+    usage.cached_tokens = n
+    usage.prompt_tokens_details = { cached_tokens: n }
+  }
   return usage
 }
 

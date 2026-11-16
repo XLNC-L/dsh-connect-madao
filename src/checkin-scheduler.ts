@@ -7,12 +7,12 @@
  * 设计上刻意克制：
  *   - 默认**关闭**，用户显式打开才算（安静地替人花钱/改状态不是好默认）
  *   - 每天只在本地时间的一个钟点跑一次，不在开机时突击
- *   - 当天已领过就什么都不做（靠 queryCheckin 的 status 判断，天然幂等）
+ *   - 当天已领过就什么都不做（claimable 判断 + 上游幂等，重复调用无副作用）
  *   - 失败只记日志，不重试轰炸上游，也不影响桥接服务
  *   - 跟 ctx.effect 绑定，插件卸载时定时器一起停
  */
 
-import { claimCheckin, queryCheckin, queryCredit } from './server.ts'
+import { claimAllCheckins, queryCredit } from './server.ts'
 import type { MadaoClient } from './client.ts'
 import { evaluateExpiry, type ExpiryNotice } from './credit-expiry.ts'
 
@@ -76,14 +76,14 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
     opts.log(`checkin scheduler armed; next at ${nextAt.toISOString()} (local ${hour}:${String(minute).padStart(2, '0')})`)
   }
 
-  const tick = async () => {
+  const tick = async (skipRearm = false) => {
     if (stopped) return
     try {
       await runOnce()
     } catch (err) {
       opts.log(`checkin scheduler run failed: ${String((err as Error)?.message ?? err)}`)
     } finally {
-      arm()
+      if (!skipRearm) arm()
     }
   }
 
@@ -94,18 +94,18 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
       return
     }
     try {
-      const state = await queryCheckin(client)
-      if (!state.available) {
-        opts.log(`checkin scheduler: ${state.reason ?? '活动不可用'}`)
+      // 一次把所有可领的签到都扫一遍：码道的签到不止「每日 100 分」那一个，
+      // 还有按活动上线的签到礼（实测见过每天 1000 分的，额度是前者十倍）。
+      // 只盯 34 号那个的话，大头的天天漏。
+      const r = await claimAllCheckins(client)
+      if (r.claimed.length === 0) {
+        const why = r.skipped.map((x) => `${x.campaignId}:${x.reason}`).join('; ')
+        opts.log(`checkin scheduler: 无可领（${why || '列表为空'}）`)
         return
       }
-      // 已经领过（当天）就别再调 claim —— 上游虽然幂等，但少发一个请求总是好的
-      if (state.status === 'CLAIMED' || state.status === 'CONFIRMED' || !state.claimable) {
-        opts.log(`checkin scheduler: 今日已签（status=${state.status}），跳过`)
-        return
+      for (const c of r.claimed) {
+        opts.log(`checkin scheduler: 已领取「${c.title}」${c.amount} 积分 (campaign=${c.campaignId})`)
       }
-      const r = await claimCheckin(client)
-      opts.log(`checkin scheduler: ${r.claimed ? `已领取 ${r.amount ?? 0} 积分` : `未领取（${r.reason ?? '未知原因'}）`}`)
     } catch (err) {
       opts.log(`checkin scheduler claim failed: ${String((err as Error)?.message ?? err)}`)
     }
@@ -129,6 +129,14 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
   }
 
   arm()
+
+  // 启动补偿 —— 这是「自动签到」能不能真正生效的关键。
+  //
+  // 只靠 arm() 的话：用户 10:05 关机，10:30 开机，定时器要等到**明天**
+  // 10:05 才动，今天这一轮就彻底错过了。所以启动时先立刻跑一轮：
+  // 当天已签的话 runOnce 里的 status 检查会直接跳过（只发一个 GET），
+  // 没签就顺手补上。代价极小，收益是「开机即补」。
+  void tick(/* skipRearm */ true).catch(() => {})
 
   return {
     stop() {
