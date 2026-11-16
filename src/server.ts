@@ -22,6 +22,7 @@ import { makeChunk, parseUpstreamEvent, sseLine, SSE_DONE } from './protocol/sse
 import { DEFAULT_CRED_PATH, candidateCredentials, loadCredentials, maskKey, migratePlaintextToEncrypted, saveCredentials, type LoadResult } from './credentials.ts'
 import { FALLBACK_MODELS, type ModelInfo } from './models.ts'
 import { parseStsIdentity } from './identity.ts'
+import { evaluateExpiry } from './credit-expiry.ts'
 
 export interface ServerOptions {
   port?: number
@@ -37,6 +38,12 @@ export interface RunningServer {
   port: number
   url: string
   close(): Promise<void>
+  /**
+   * 取当前有效的 client（内部会先刷新 STS）。
+   * 给宿主侧的定时任务用 —— 调度器不能持有构造时的旧快照，
+   * STS 一小时就过期了。
+   */
+  getClient(): Promise<MadaoClient | null>
 }
 
 /** 码道可用模型（实测自 /v1/model/builtin）。 */
@@ -163,6 +170,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     port: actualPort,
     url: `http://${host}:${actualPort}`,
     close: () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
+    async getClient() {
+      try {
+        await ensureFreshClient(ctx)
+      } catch {}
+      return ctx.client
+    },
   }
 }
 
@@ -210,53 +223,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
       return json(res, 503, { error: { message: ctx.loadError ?? '凭证未加载', type: 'credentials_error' } })
     }
     try {
-      const d = (await ctx.client.getJson('/v1/ops/delivery?channel=IDE')) as any
-      const items: any[] = d?.data?.items ?? []
-      const daily = items.find((x) => x?.campaignId === 34)
-      if (!daily) {
-        return json(res, 200, {
-          ok: true,
-          available: false,
-          reason: '网关的福利列表里没有每日签到活动（campaignId=34）',
-        })
-      }
-
-      const state = {
-        campaignId: 34,
-        title: daily.title,
-        status: daily.status,
-        claimable: daily.claimable === true,
-        pendingAmount: daily.pendingTotalAmount ?? 0,
-        unit: daily.benefitUnit ?? 'CREDIT',
-        expireAt: daily.expireAt ?? null,
-      }
-
       // GET 只查不领 —— 签到一天一次，绝不因为"打开了面板"就替用户点掉
       if (req.method === 'GET') {
-        return json(res, 200, { ok: true, available: true, ...state })
+        return json(res, 200, await queryCheckin(ctx.client))
       }
-
-      if (!state.claimable || daily.status !== 'ELIGIBLE') {
-        return json(res, 200, { ok: true, available: true, claimed: false, ...state, reason: '当前不可领取' })
-      }
-
-      const r = (await ctx.client.postJson('/v1/ops/claim', {
-        campaignId: 34,
-        idempotentKey: randomUUID(),
-        channel: 'IDE',
-      })) as any
-      const claimed = r?.code === 0
-      chatLog(`checkin ${claimed ? 'OK' : 'FAIL'} campaign=34 ${JSON.stringify(r?.data ?? r).slice(0, 200)}`)
-      return json(res, 200, {
-        ok: true,
-        available: true,
-        claimed,
-        ...state,
-        status: r?.data?.status ?? state.status,
-        amount: r?.data?.totalAmount ?? state.pendingAmount,
-        claimedAt: r?.data?.claimedAt ?? null,
-        ...(claimed ? {} : { reason: String(r?.message ?? '领取失败') }),
-      })
+      return json(res, 200, await claimCheckin(ctx.client))
     } catch (e) {
       chatLog(`checkin ERROR ${String((e as Error)?.message ?? e).slice(0, 200)}`)
       return json(res, 502, {
@@ -817,14 +788,119 @@ export interface CreditInfo {
   onDemand?: { amount: number; used: number; remain: number }
   /** 累计消耗 token */
   totalTokens?: number
+  /**
+   * 即将到期的积分数量（上游 package_credit_expiring_amount）。
+   *
+   * 这个字段以前被整个忽略了，而它恰恰是「白送的积分在到期」的唯一信号：
+   * 体验版 / 活动赠送的积分按批次到期，过期即清零，不看这个字段就
+   * 只能等某天发现余额突然少了一截。
+   */
+  expiringAmount?: number
+  /** 套餐周期（上游 start_date / end_date，YYYY-MM-DD） */
+  packageStart?: string
+  packageEnd?: string
 }
 
 function pickMetric(list: any[], name: string): any | undefined {
   return list.find((m) => m?.name === name)
 }
 
+/**
+ * 从汇总指标里取「即将到期」的积分。
+ *
+ * 上游在 usageTotalPackageCredit / usageBonusPackageCredit 上带
+ * package_credit_expiring_amount；分项指标没有这个字段。取不到就当 0，
+ * 绝不因为一个可选字段把整个额度查询打成失败。
+ */
+export function pickExpiring(list: any[]): number {
+  for (const name of ['usageTotalPackageCredit', 'usageBonusPackageCredit']) {
+    const m = pickMetric(list, name)
+    if (m && m.package_credit_expiring_amount != null) {
+      const n = Number(m.package_credit_expiring_amount)
+      if (Number.isFinite(n) && n > 0) return n
+    }
+  }
+  return 0
+}
+
+/* ------------------------------------------------------------------ *
+ * 每日签到（campaignId=34）
+ *
+ * 接口是从码道客户端抓出来的（extension.js 里 welfareClaimUrl 拼的是
+ * ${policyCenterDomain}/v1/ops/claim，policyCenterDomain 就是网关域名）：
+ *   列表  GET  /v1/ops/delivery?channel=IDE
+ *   领取  POST /v1/ops/claim  { campaignId, idempotentKey, channel:"IDE" }
+ *
+ * 抽成独立函数是为了让「设置页里手动点」和「宿主定时器自动签」走
+ * 同一份逻辑 —— 两边各写一遍迟早会漂移。
+ * ------------------------------------------------------------------ */
+
+/** 每日签到活动 id，网关里固定是 34（USER_LOGIN / MANUAL_CLAIM）。 */
+export const DAILY_CHECKIN_CAMPAIGN = 34
+
+export interface CheckinState {
+  ok: boolean
+  available: boolean
+  claimed?: boolean
+  campaignId?: number
+  title?: string
+  status?: string
+  claimable?: boolean
+  pendingAmount?: number
+  unit?: string
+  expireAt?: string | null
+  amount?: number
+  claimedAt?: string | null
+  reason?: string
+}
+
+/** 只查询签到状态，不领取。 */
+export async function queryCheckin(client: MadaoClient): Promise<CheckinState> {
+  const d = (await client.getJson('/v1/ops/delivery?channel=IDE')) as any
+  const items: any[] = d?.data?.items ?? []
+  const daily = items.find((x) => x?.campaignId === DAILY_CHECKIN_CAMPAIGN)
+  if (!daily) {
+    return { ok: true, available: false, reason: '网关的福利列表里没有每日签到活动（campaignId=34）' }
+  }
+  return {
+    ok: true,
+    available: true,
+    campaignId: DAILY_CHECKIN_CAMPAIGN,
+    title: daily.title,
+    status: daily.status,
+    claimable: daily.claimable === true,
+    pendingAmount: daily.pendingTotalAmount ?? 0,
+    unit: daily.benefitUnit ?? 'CREDIT',
+    expireAt: daily.expireAt ?? null,
+  }
+}
+
+/** 领取当日签到。当天已领过时返回 claimed=false 且带 reason，不抛错。 */
+export async function claimCheckin(client: MadaoClient): Promise<CheckinState> {
+  const state = await queryCheckin(client)
+  if (!state.available) return state
+  if (!state.claimable || state.status !== 'ELIGIBLE') {
+    return { ...state, claimed: false, reason: '当前不可领取' }
+  }
+  const r = (await client.postJson('/v1/ops/claim', {
+    campaignId: DAILY_CHECKIN_CAMPAIGN,
+    idempotentKey: randomUUID(),
+    channel: 'IDE',
+  })) as any
+  const claimed = r?.code === 0
+  chatLog(`checkin ${claimed ? 'OK' : 'FAIL'} campaign=${DAILY_CHECKIN_CAMPAIGN} ${JSON.stringify(r?.data ?? r).slice(0, 200)}`)
+  return {
+    ...state,
+    claimed,
+    status: r?.data?.status ?? state.status,
+    amount: r?.data?.totalAmount ?? state.pendingAmount,
+    claimedAt: r?.data?.claimedAt ?? null,
+    ...(claimed ? {} : { reason: String(r?.message ?? '领取失败') }),
+  }
+}
+
 /** 读积分额度。失败返回 null，不影响其它诊断项。 */
-async function queryCredit(client: MadaoClient): Promise<CreditInfo | null> {
+export async function queryCredit(client: MadaoClient): Promise<CreditInfo | null> {
   try {
     const r = (await client.getJson('/snap-manager/v1/statistics/plugin')) as { metrics?: any[] }
     const list = r?.metrics ?? []
@@ -841,6 +917,11 @@ async function queryCredit(client: MadaoClient): Promise<CreditInfo | null> {
       bonus: pkg(pickMetric(list, 'usageBonusPackageCredit')),
       onDemand: pkg(pickMetric(list, 'usageOnDemandPackageCredit')),
       totalTokens: tokens ? Number(tokens.usage_token_num ?? 0) : undefined,
+      // package_credit_expiring_amount 只在两个「汇总」指标上出现，
+      // 分项指标（basic / onDemand）没有这个字段，所以取汇总那份。
+      expiringAmount: pickExpiring(list),
+      packageStart: typeof r?.start_date === 'string' ? r.start_date : undefined,
+      packageEnd: typeof r?.end_date === 'string' ? r.end_date : undefined,
     }
   } catch {
     return null
@@ -892,7 +973,13 @@ async function accountInfo(ctx: Ctx): Promise<unknown> {
     base.sessionKey = { keyId: key.keyId, ttlSec: Math.round((key.expiresAt - Date.now()) / 1000) }
 
     const credit = await queryCredit(ctx.client)
-    if (credit) base.credit = credit
+    if (credit) {
+      base.credit = credit
+      // 到期预警：expiringAmount 是上游给的「即将到期」数量，
+      // 这个字段以前完全没被读，导致积分悄悄清零都没人知道。
+      const notice = evaluateExpiry(credit)
+      if (notice.level !== 'none') base.creditExpiry = notice
+    }
 
     // 角色信息拿不到也无所谓，纯展示
     try {

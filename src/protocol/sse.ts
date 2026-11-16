@@ -8,6 +8,22 @@
  * 因此这里做「宽容解析」：优先识别 OpenAI 形状，其次识别 ai-sdk 形状。
  */
 
+/**
+ * 用量。除了三个总数，还带上缓存命中数。
+ *
+ * 为什么要有 cached：码道和 DeepSeek 官方一样**默认开前缀缓存**，
+ * 命中部分价格约为冷启动的 1/10。上游在 `prompt_tokens_details.cached_tokens`
+ * 里给了这个数，但之前插件把它丢了 —— 结果 DSH 那边的账本只能把每次
+ * 输入都按全价算，金额看起来虚高好几倍，而真正省下的钱谁都看不见。
+ */
+export interface UsageInfo {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  /** 输入中命中前缀缓存的 token 数；上游不给时为 undefined */
+  cached_tokens?: number
+}
+
 export interface OpenAIDelta {
   role?: string
   content?: string
@@ -33,11 +49,7 @@ export interface OpenAIChunk {
     delta: OpenAIDelta
     finish_reason: string | null
   }>
-  usage?: {
-    prompt_tokens: number
-    completion_tokens: number
-    total_tokens: number
-  }
+  usage?: UsageInfo
 }
 
 export function makeChunk(
@@ -70,8 +82,8 @@ export interface ParsedEvent {
   toolCalls?: unknown[]
   /** 结束原因 */
   finish?: string
-  /** 用量 */
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  /** 用量（含缓存命中数） */
+  usage?: UsageInfo
   /** 是否收到结束信号 */
   done?: boolean
   /** 原始对象，供调试 */
@@ -82,6 +94,31 @@ export interface ParsedEvent {
  * 解析一条 SSE 事件（已去掉 `data: ` 前缀的 JSON 文本）。
  * 不认识的形状返回空对象，调用方应跳过。
  */
+/**
+ * 从上游 usage 对象里挑出我们认识的字段。
+ *
+ * 两种命名都要认：OpenAI 原生 snake_case（prompt_tokens）和
+ * 某些网关的 camelCase（promptTokens）。缓存数同理，上游可能与
+ * `prompt_tokens_details.cached_tokens`（OpenAI 标准位置）或
+ * `cached_tokens`（扁平）两种形状出现，都试一遍。
+ */
+export function pickUsage(raw: any): UsageInfo {
+  const u = raw ?? {}
+  const usage: UsageInfo = {
+    prompt_tokens: u.promptTokens ?? u.prompt_tokens ?? 0,
+    completion_tokens: u.completionTokens ?? u.completion_tokens ?? 0,
+    total_tokens: u.totalTokens ?? u.total_tokens ?? 0,
+  }
+  const cached =
+    u.prompt_tokens_details?.cached_tokens ??
+    u.promptTokensDetails?.cached_tokens ??
+    u.cached_tokens ??
+    u.cache_read_input_tokens ??
+    undefined
+  if (cached != null && Number.isFinite(Number(cached))) usage.cached_tokens = Number(cached)
+  return usage
+}
+
 export function parseUpstreamEvent(data: string): ParsedEvent {
   const trimmed = data.trim()
   if (!trimmed) return {}
@@ -102,11 +139,7 @@ export function parseUpstreamEvent(data: string): ParsedEvent {
 
     // usage 可能出现在 choices:[] 的独立帧里（码道就是这样发的）
     if (obj.usage) {
-      out.usage = {
-        prompt_tokens: obj.usage.prompt_tokens ?? 0,
-        completion_tokens: obj.usage.completion_tokens ?? 0,
-        total_tokens: obj.usage.total_tokens ?? 0,
-      }
+      out.usage = pickUsage(obj.usage)
     }
 
     const ch = obj.choices[0]
@@ -138,11 +171,7 @@ export function parseUpstreamEvent(data: string): ParsedEvent {
   if (type === 'finish' || type === 'finish-step') {
     out.finish = obj.finishReason ?? obj.finish_reason ?? 'stop'
     if (obj.usage) {
-      out.usage = {
-        prompt_tokens: obj.usage.promptTokens ?? obj.usage.prompt_tokens ?? 0,
-        completion_tokens: obj.usage.completionTokens ?? obj.usage.completion_tokens ?? 0,
-        total_tokens: obj.usage.totalTokens ?? obj.usage.total_tokens ?? 0,
-      }
+      out.usage = pickUsage(obj.usage)
     }
     return out
   }

@@ -14,6 +14,7 @@
  */
 
 import { startServer, type RunningServer } from './server.ts'
+import { startCheckinScheduler, type Scheduler } from './checkin-scheduler.ts'
 import { loadCredentials, DEFAULT_CRED_PATH } from './credentials.ts'
 import { StsProvider } from './sts-provider.ts'
 import { MadaoClient } from './client.ts'
@@ -64,6 +65,15 @@ export interface MadaoConfig {
   sk?: string
   /** 是否在启动时把模型清单写回 patch（默认 true） */
   autoSyncModels?: boolean
+  /**
+   * 自动签到。默认**关闭** —— 替用户改账号状态这种事，得他本人点头。
+   * 打开后在本地时间 autoCheckinHour:autoCheckinMinute 跑一次。
+   */
+  autoCheckin?: boolean
+  /** 自动签到的本地时刻·时（0-23，默认 10） */
+  autoCheckinHour?: number
+  /** 自动签到的本地时刻·分（0-59，默认 5） */
+  autoCheckinMinute?: number
 }
 
 export function apply(ctx: any, config: MadaoConfig = {}): void {
@@ -86,6 +96,8 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
     if (typeof ctx?.effect === 'function') {
       ctx.effect(
         () => () => {
+          scheduler?.stop()
+          scheduler = void 0
           void server?.close().catch(() => {})
           server = void 0
           diag('disposed')
@@ -127,6 +139,30 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
     }
   }
 
+  // 自动签到：默认不开。开了就每天墙钟对齐跑一次，幂等（当天已签会跳过）。
+  let scheduler: Scheduler | undefined
+  // 调度器取 client 的入口，server 起来后才有值
+  let pendingClient: MadaoClient | null = null
+  let serverRef: RunningServer | undefined
+  const startAutoCheckin = (): void => {
+    if (config.autoCheckin !== true) {
+      diag('autoCheckin disabled (default)')
+      return
+    }
+    try {
+      scheduler = startCheckinScheduler({
+        hour: config.autoCheckinHour,
+        minute: config.autoCheckinMinute,
+        // 现取，不缓存：STS 一小时就过期，缓存的 client 会拿旧 token 签名
+        getClient: () => (serverRef ? serverRef.getClient() : pendingClient),
+        log: (line) => diag(`[checkin] ${line}`),
+      })
+      diag('autoCheckin enabled')
+    } catch (err) {
+      diag(`autoCheckin failed to start: ${String(err)}`)
+    }
+  }
+
   void (async () => {
     try {
       const models = await syncModels()
@@ -141,6 +177,11 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
 
       server = await startServer({ port, host: '127.0.0.1', gateway: config.gateway, models })
       diag(`bridge ready at ${server.url}/v1 (models=${models.length}, credentials: ${hint})`)
+
+      // 把 server 挂上，调度器每轮现取 client（STS 会过期，不能存快照）
+      serverRef = server
+      pendingClient = (await server.getClient().catch(() => null)) as MadaoClient | null
+      startAutoCheckin()
     } catch (err) {
       diag(`bridge failed to start: ${String((err as Error)?.stack ?? err)}`)
     }
