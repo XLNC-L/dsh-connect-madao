@@ -143,10 +143,9 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
     }
   }
 
-  // 自动签到：默认不开。开了就每天墙钟对齐跑一次，幂等（当天已签会跳过）。
+  // 自动签到：默认开启。每天跑一次，幂等（当天已签会跳过）。
   let scheduler: Scheduler | undefined
   // 调度器取 client 的入口，server 起来后才有值
-  let pendingClient: MadaoClient | null = null
   let serverRef: RunningServer | undefined
   const startAutoCheckin = (): void => {
     if (config.autoCheckin === false) {
@@ -158,7 +157,8 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
         hour: config.autoCheckinHour,
         minute: config.autoCheckinMinute,
         // 现取，不缓存：STS 一小时就过期，缓存的 client 会拿旧 token 签名
-        getClient: () => (serverRef ? serverRef.getClient() : pendingClient),
+        // server 起来后才有值；没起来时返回 null，调度器会本轮跳过
+        getClient: () => (serverRef ? serverRef.getClient() : null),
         log: (line) => diag(`[checkin] ${line}`),
       })
       diag('autoCheckin enabled')
@@ -184,7 +184,6 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
 
       // 把 server 挂上，调度器每轮现取 client（STS 会过期，不能存快照）
       serverRef = server
-      pendingClient = (await server.getClient().catch(() => null)) as MadaoClient | null
       startAutoCheckin()
     } catch (err) {
       diag(`bridge failed to start: ${String((err as Error)?.stack ?? err)}`)

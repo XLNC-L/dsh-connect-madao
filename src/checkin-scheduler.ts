@@ -5,16 +5,25 @@
  * 之前只有设置页里一个按钮，忘了点当天那 100 积分就是白丢。
  *
  * 设计上刻意克制：
- *   - 默认**关闭**，用户显式打开才算（安静地替人花钱/改状态不是好默认）
- *   - 每天只在本地时间的一个钟点跑一次，不在开机时突击
+ *   - 默认**开启**（签到是纯收益且幂等）；想关的配 autoCheckin: false
+ *   - 每天成功一次就停；启动时若已过设定时刻也会补跑一次
  *   - 当天已领过就什么都不做（claimable 判断 + 上游幂等，重复调用无副作用）
- *   - 失败只记日志，不重试轰炸上游，也不影响桥接服务
+ *   - 失败当天最多试几次就收手，不每分钟轰炸上游
  *   - 跟 ctx.effect 绑定，插件卸载时定时器一起停
  */
 
 import { claimAllCheckins, queryCredit } from './server.ts'
 import type { MadaoClient } from './client.ts'
 import { evaluateExpiry, type ExpiryNotice } from './credit-expiry.ts'
+
+/**
+ * 一天最多尝试几次。
+ *
+ * 没有上限的话，凭证一直没配好或上游一直报错时，每分钟一次的轮询会变成
+ * 一天几百上千次请求 —— 既刷日志也打扰上游。3 次之后再等明天，用户修好
+ * 凭证重启插件时会重新开始计数。
+ */
+export const MAX_ATTEMPTS_PER_DAY = 3
 
 export interface SchedulerOptions {
   /** 每日执行时刻（本地时间，0-23），默认 10 点 */
@@ -66,6 +75,10 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
   let running = false
   /** 本机上一次「确认过」的日期（YYYY-MM-DD），只在内存里，不落盘 */
   let lastHandledDate = ''
+  /** 今天已经尝试过几次（成功了就不再涨） */
+  let attemptsToday = 0
+  /** 今天已经确认过的那一天，用来在跨天时把 attemptsToday 归零 */
+  let attemptsDate = ''
 
   const todayKey = (d = new Date()) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -86,10 +99,20 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
     if (key === lastHandledDate) return          // 今天已经处理过
     const due = now.getHours() * 60 + now.getMinutes() >= hour * 60 + minute
     if (!due) return                             // 还没到点
+    // 跨天把重试计数归零
+    if (attemptsDate !== key) {
+      attemptsDate = key
+      attemptsToday = 0
+    }
+    // 今天的重试次数用完了就收手，别每分钟往上游发一次请求
+    if (attemptsToday >= MAX_ATTEMPTS_PER_DAY) return
+
     running = true
     try {
+      attemptsToday += 1
       // 只有「今天确实不需要再试了」才记下来。凭证没就绪、网络失败这类
-      // 都不记，留给下一分钟重试 —— 否则一次网络抖动就把整天跳过了。
+      // 都不记，留给下一次重试 —— 否则一次网络抖动就把整天跳过了。
+      // 但重试有上限（MAX_ATTEMPTS_PER_DAY），不会无限打。
       if (await runOnce()) lastHandledDate = key
     } catch (err) {
       opts.log(`checkin scheduler run failed: ${String((err as Error)?.message ?? err)}`)
@@ -159,7 +182,7 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
     async runNow() {
       // 跟定时器走同一套保护：正在跑就跳过，跑完也记下当天已完成。
       // 否则整点手动点「立即签到」会和定时器撞在一起，白打两次请求。
-      if (running) return
+      if (stopped || running) return
       running = true
       try {
         if (await runOnce()) lastHandledDate = todayKey()

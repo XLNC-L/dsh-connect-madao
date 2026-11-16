@@ -79,3 +79,39 @@ test('缓存数大于 prompt_tokens 时不篡改（交给上层判断）', () =>
   const u = pickUsage({ prompt_tokens: 100, completion_tokens: 1, total_tokens: 101, cached_tokens: 500 })
   assert.equal(u.cached_tokens, 500)
 })
+test('空字符串不能当成"命中 0 个缓存"', () => {
+  // Number('') === 0，不挡住的话会把「上游没给」变成「命中 0 个」
+  const u = pickUsage({ prompt_tokens: 10, completion_tokens: 1, total_tokens: 11, cached_tokens: '' })
+  assert.equal(u.cached_tokens, undefined)
+})
+
+test('布尔值不能当成缓存数', () => {
+  // Number(false) === 0
+  const u = pickUsage({ prompt_tokens: 10, cached_tokens: false as any })
+  assert.equal(u.cached_tokens, undefined)
+  const u2 = pickUsage({ prompt_tokens: 10, cached_tokens: true as any })
+  assert.equal(u2.cached_tokens, undefined)
+})
+
+test('负数缓存数视为无效', () => {
+  const u = pickUsage({ prompt_tokens: 10, cached_tokens: -5 })
+  assert.equal(u.cached_tokens, undefined)
+})
+
+test('数字字符串可以接受', () => {
+  const u = pickUsage({ prompt_tokens: 100, cached_tokens: '64' })
+  assert.equal(u.cached_tokens, 64)
+})
+
+test('认全驼峰 promptTokensDetails.cachedTokens', () => {
+  const u = pickUsage({
+    promptTokens: 100,
+    promptTokensDetails: { cachedTokens: 80 },
+  })
+  assert.equal(u.cached_tokens, 80)
+})
+
+test('真命中 0 个时保留 0（与"没给"区分开）', () => {
+  const u = pickUsage({ prompt_tokens: 100, cached_tokens: 0 })
+  assert.equal(u.cached_tokens, 0)
+})

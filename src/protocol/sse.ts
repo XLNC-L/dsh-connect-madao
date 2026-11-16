@@ -108,6 +108,21 @@ export interface ParsedEvent {
  * `prompt_tokens_details.cached_tokens`（OpenAI 标准位置）或
  * `cached_tokens`（扁平）两种形状出现，都试一遍。
  */
+/**
+ * 把上游给的值转成非负数字。
+ *
+ * 空字符串、布尔、NaN、负数一律视为「上游没给」，返回 null。
+ * 这样下游能区分「没有缓存数据」和「缓存命中 0 个」。
+ */
+function toNonNegativeNumber(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) && v >= 0 ? v : null
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  }
+  return null
+}
+
 export function pickUsage(raw: any): UsageInfo {
   const u = raw ?? {}
   const usage: UsageInfo = {
@@ -118,11 +133,16 @@ export function pickUsage(raw: any): UsageInfo {
   const cached =
     u.prompt_tokens_details?.cached_tokens ??
     u.promptTokensDetails?.cached_tokens ??
+    u.promptTokensDetails?.cachedTokens ??
     u.cached_tokens ??
+    u.cachedTokens ??
     u.cache_read_input_tokens ??
     undefined
-  if (cached != null && Number.isFinite(Number(cached))) {
-    const n = Number(cached)
+  // 注意 Number('') 和 Number(false) 都是 0 —— 上游万一给了空串或布尔值，
+  // 不能当成「命中 0 个缓存」，那会把 undefined（上游没给）和 0（真没命中）
+  // 混为一谈。这里只接受真正的数字或非空数字字符串。
+  const n = toNonNegativeNumber(cached)
+  if (n != null) {
     usage.cached_tokens = n
     usage.prompt_tokens_details = { cached_tokens: n }
   }

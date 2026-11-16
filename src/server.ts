@@ -173,7 +173,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     async getClient() {
       try {
         await ensureFreshClient(ctx)
-      } catch {}
+      } catch (err) {
+        // 刷新失败（STS 换不到、refresh token 失效）时**不能**把手里那个
+        // 已经过期的 client 递出去 —— 下游拿着它请求只会连续报鉴权错，
+        // 然后被当成「可重试失败」反复重试。这里明确返回 null，让调用方跳过。
+        chatLog(`getClient refresh failed: ${String((err as Error)?.message ?? err).slice(0, 160)}`)
+        return null
+      }
       return ctx.client
     },
   }
@@ -924,13 +930,20 @@ export async function claimAllCheckins(client: MadaoClient): Promise<{
     const mode = it?.extra?.triggerMode
     if (!Number.isFinite(id)) continue
 
-    // 自动发放的不用管；报名/认证类不该替用户做
+    // 自动发放的不用管（去 claim 反而错）。
     if (mode === 'AUTO_GRANT') {
       skipped.push({ campaignId: id, title, reason: '自动发放，无需领取' })
       continue
     }
-    if (!it?.claimable) {
-      skipped.push({ campaignId: id, title, reason: `当前不可领（status=${it?.status ?? 'null'}）` })
+    // 必须真的可领：claimable 为真且状态是 ELIGIBLE。
+    // 只信 claimable 一个布尔位不够 —— 上游将来若有活动把 claimable 默认设成
+    // true（比如「点击即视为同意协议」那种），这里会替用户把决定做了。
+    if (!it?.claimable || it?.status !== 'ELIGIBLE') {
+      skipped.push({
+        campaignId: id,
+        title,
+        reason: `当前不可领（status=${it?.status ?? 'null'}, claimable=${it?.claimable}）`,
+      })
       continue
     }
 

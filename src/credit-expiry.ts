@@ -42,12 +42,15 @@ export function evaluateExpiry(credit: CreditInfo | null, now: Date = new Date()
   if (!credit) return { level: 'none', message: '', expiringAmount: 0, daysLeft: null, dueDate: null }
 
   const expiring = Number(credit.expiringAmount ?? 0)
-  if (!Number.isFinite(expiring) || expiring <= 0) {
+  // 不足 1 分的残余小数（比如 0.2）四舍五入后是 0，提醒「0 积分要到期」
+  // 只会让用户困惑，直接忽略。
+  if (!Number.isFinite(expiring) || Math.round(expiring) <= 0) {
     return { level: 'none', message: '', expiringAmount: 0, daysLeft: null, dueDate: null }
   }
 
   const due = parseDate(credit.packageEnd)
-  const daysLeft = due ? Math.ceil((due.getTime() - startOfDay(now).getTime()) / 86400000) : null
+  // 用 round 而不是 ceil：夏令时切换那天一昼夜只有 23 小时，ceil 会多算一天
+  const daysLeft = due ? Math.round((due.getTime() - startOfDay(now).getTime()) / 86400000) : null
 
   let level: ExpiryLevel = 'info'
   if (daysLeft != null) {
@@ -84,9 +87,16 @@ function startOfDay(d: Date): Date {
 /** 解析 YYYY-MM-DD 为本地时间当天 0 点；格式不对返回 null。 */
 export function parseDate(s: string | undefined | null): Date | null {
   if (!s) return null
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s).trim())
+  // 只取开头的 YYYY-MM-DD，后面跟时间或者时区后缀都容忍
+  // （上游现在给纯日期，但哪天改成 ISO 时间串也不能瞎）。
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/.exec(String(s).trim())
   if (!m) return null
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  const month = Number(m[2])
+  const day = Number(m[3])
+  // 月份 13、日期 32 这种不合法值，JS 会悄悄进位到别的日子，算出来的
+  // 天数就是错的。直接当解析失败。
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  const d = new Date(Number(m[1]), month - 1, day)
   return Number.isNaN(d.getTime()) ? null : d
 }
 

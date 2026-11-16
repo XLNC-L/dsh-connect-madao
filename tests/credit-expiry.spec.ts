@@ -76,14 +76,23 @@ test('expiringAmount 是脏数据时不炸', () => {
   }
 })
 
-test('parseDate 只认 YYYY-MM-DD', () => {
+test('parseDate 认 YYYY-MM-DD，也容忍后面带时间', () => {
   assert.ok(parseDate('2026-11-17'))
+  // 上游现在给纯日期，但哪天改成 ISO 串也不能瞎
+  assert.ok(parseDate('2026-11-17T00:00:00Z'))
+  assert.ok(parseDate('2026-11-17 23:59:59'))
   assert.equal(parseDate('2026/11/17'), null)
   assert.equal(parseDate('17-11-2026'), null)
   assert.equal(parseDate(''), null)
   assert.equal(parseDate(undefined), null)
-  // 13 月 JS 会进位成次年 1 月（month=0）；这里只要求不抛错、能返回 Date
-  assert.ok(parseDate('2026-13-01') instanceof Date)
+})
+
+test('parseDate 拒绝不合法的月份/日期（不让 JS 悄悄进位）', () => {
+  // 13 月会被 JS 进位成次年 1 月，算出来的天数就是错的
+  assert.equal(parseDate('2026-13-01'), null)
+  assert.equal(parseDate('2026-00-10'), null)
+  assert.equal(parseDate('2026-11-32'), null)
+  assert.equal(parseDate('2026-11-00'), null)
 })
 
 test('formatAmount 取整并加千分位', () => {
@@ -117,4 +126,13 @@ test('pickExpiring 没有该字段时返回 0 而不是 undefined', () => {
 
 test('pickExpiring 空列表返回 0', () => {
   assert.equal(pickExpiring([]), 0)
+})
+test('不足 1 分的残余小数不提醒（避免"0 积分要到期"）', () => {
+  const n = evaluateExpiry(credit({ expiringAmount: 0.2, packageEnd: '2026-11-17' }), NOW)
+  assert.equal(n.level, 'none')
+})
+
+test('0.6 分会被四舍五入成 1，仍然提醒', () => {
+  const n = evaluateExpiry(credit({ expiringAmount: 0.6, packageEnd: '2026-11-17' }), NOW)
+  assert.equal(n.level, 'urgent')
 })
