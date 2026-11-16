@@ -11,10 +11,8 @@
 /**
  * 用量。除了三个总数，还带上缓存命中数。
  *
- * 为什么要有 cached：码道和 DeepSeek 官方一样**默认开前缀缓存**，
- * 命中部分价格约为冷启动的 1/10。上游在 `prompt_tokens_details.cached_tokens`
- * 里给了这个数，但之前插件把它丢了 —— 结果 DSH 那边的账本只能把每次
- * 输入都按全价算，金额看起来虚高好几倍，而真正省下的钱谁都看不见。
+ * cached 是输入中命中前缀缓存的 token 数。码道默认开前缀缓存，
+ * 命中部分价格约为冷启动的 1/10；把这个数如实带给下游，账本才算得准。
  */
 export interface UsageInfo {
   prompt_tokens: number

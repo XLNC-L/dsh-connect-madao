@@ -66,8 +66,12 @@ export interface MadaoConfig {
   /** 是否在启动时把模型清单写回 patch（默认 true） */
   autoSyncModels?: boolean
   /**
-   * 自动签到。默认**关闭** —— 替用户改账号状态这种事，得他本人点头。
-   * 打开后在本地时间 autoCheckinHour:autoCheckinMinute 跑一次。
+   * 自动签到。默认**开启**。
+   *
+   * 曾经做成默认关闭，理由是「替用户改账号状态要本人点头」。但设置面板里
+   * 没有这个开关（本 PR 没动 UI），默认关 = 一个不懂代码的用户装上后
+   * 永远用不到，等于白装。而签到本身是纯收益、又幂等（当天已签会跳过），
+   * 所以改成默认开启，想关的人配 autoCheckin: false。
    */
   autoCheckin?: boolean
   /** 自动签到的本地时刻·时（0-23，默认 10） */
@@ -145,8 +149,8 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
   let pendingClient: MadaoClient | null = null
   let serverRef: RunningServer | undefined
   const startAutoCheckin = (): void => {
-    if (config.autoCheckin !== true) {
-      diag('autoCheckin disabled (default)')
+    if (config.autoCheckin === false) {
+      diag('autoCheckin disabled by config')
       return
     }
     try {

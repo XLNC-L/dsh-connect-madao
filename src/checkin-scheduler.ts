@@ -118,7 +118,7 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
       }
       // 有渠道报出了「稍后再试」类原因（比如明明 claimable 却领取失败），
       // 说明今天还没利索，下一分钟再瞅一眼。
-      settled = !r.skipped.some((x) => /失败|error|timeout|超时/i.test(x.reason))
+      settled = !r.skipped.some((x) => /失败|异常|繁忙|稍后|重试|error|fail|timeout|超时/i.test(x.reason))
     } catch (err) {
       opts.log(`checkin scheduler claim failed: ${String((err as Error)?.message ?? err)}`)
       settled = false
@@ -157,7 +157,15 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
       opts.log('checkin scheduler stopped')
     },
     async runNow() {
-      await runOnce()
+      // 跟定时器走同一套保护：正在跑就跳过，跑完也记下当天已完成。
+      // 否则整点手动点「立即签到」会和定时器撞在一起，白打两次请求。
+      if (running) return
+      running = true
+      try {
+        if (await runOnce()) lastHandledDate = todayKey()
+      } finally {
+        running = false
+      }
     },
     nextRunAt() {
       return nextRunFrom(new Date(), hour, minute)

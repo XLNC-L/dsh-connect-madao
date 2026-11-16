@@ -791,9 +791,8 @@ export interface CreditInfo {
   /**
    * 即将到期的积分数量（上游 package_credit_expiring_amount）。
    *
-   * 这个字段以前被整个忽略了，而它恰恰是「白送的积分在到期」的唯一信号：
-   * 体验版 / 活动赠送的积分按批次到期，过期即清零，不看这个字段就
-   * 只能等某天发现余额突然少了一截。
+   * 体验版 / 活动赠送的积分按批次到期、过期即清零，这是唯一能提前知道
+   * 「有多少积分要作废」的信号。
    */
   expiringAmount?: number
   /** 套餐周期（上游 start_date / end_date，YYYY-MM-DD） */
