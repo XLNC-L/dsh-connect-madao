@@ -62,56 +62,69 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
   let timer: NodeJS.Timeout | undefined
   let stopped = false
   let lastExpiry: ExpiryNotice | null = null
-  let nextAt = nextRunFrom(new Date(), hour, minute)
+  /** 正在跑的时候再触发就直接跳过，避免两次检查叠在一起 */
+  let running = false
+  /** 本机上一次「确认过」的日期（YYYY-MM-DD），只在内存里，不落盘 */
+  let lastHandledDate = ''
 
-  const arm = () => {
-    if (stopped) return
-    nextAt = nextRunFrom(new Date(), hour, minute)
-    const delay = Math.max(1000, nextAt.getTime() - Date.now())
-    timer = setTimeout(() => {
-      void tick()
-    }, delay)
-    // 不要因为定时器还挂着就让进程不退出
-    timer.unref?.()
-    opts.log(`checkin scheduler armed; next at ${nextAt.toISOString()} (local ${hour}:${String(minute).padStart(2, '0')})`)
-  }
+  const todayKey = (d = new Date()) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
-  const tick = async (skipRearm = false) => {
-    if (stopped) return
+  /**
+   * 每分钟看一眼，而不是「定一个 24 小时后的闹钟」。
+   *
+   * 为什么这么改：定点 setTimeout 遇到电脑合盖睡眠 / 系统改时间 / 跨天，
+   * 触发时机就不可靠了 —— 合盖睡一夜第二天掀开盖子，进程没重启，
+   * 那个闹钟可能已经过期也可能还要再等一天。改成每分钟轮询后，
+   * 无论是睡眠醒来、跨天、还是手动改时间，最多 60 秒内自己就纠正过来了。
+   * 一分钟醒一次的开销可以忽略（不联网、只比两个数字）。
+   */
+  const tick = async () => {
+    if (stopped || running) return
+    const now = new Date()
+    const key = todayKey(now)
+    if (key === lastHandledDate) return          // 今天已经处理过
+    const due = now.getHours() * 60 + now.getMinutes() >= hour * 60 + minute
+    if (!due) return                             // 还没到点
+    running = true
     try {
-      await runOnce()
+      // 只有「今天确实不需要再试了」才记下来。凭证没就绪、网络失败这类
+      // 都不记，留给下一分钟重试 —— 否则一次网络抖动就把整天跳过了。
+      if (await runOnce()) lastHandledDate = key
     } catch (err) {
       opts.log(`checkin scheduler run failed: ${String((err as Error)?.message ?? err)}`)
     } finally {
-      if (!skipRearm) arm()
+      running = false
     }
   }
 
-  const runOnce = async () => {
+  /** 返回 true 表示「今天不用再试了」；false 表示稍后还该重试 */
+  const runOnce = async (): Promise<boolean> => {
     const client = await opts.getClient()
     if (!client) {
       opts.log('checkin scheduler skipped: no client (credentials not ready)')
-      return
+      return false
     }
+    let settled = true
     try {
-      // 一次把所有可领的签到都扫一遍：码道的签到不止「每日 100 分」那一个，
-      // 还有按活动上线的签到礼（实测见过每天 1000 分的，额度是前者十倍）。
-      // 只盯 34 号那个的话，大头的天天漏。
       const r = await claimAllCheckins(client)
       if (r.claimed.length === 0) {
         const why = r.skipped.map((x) => `${x.campaignId}:${x.reason}`).join('; ')
         opts.log(`checkin scheduler: 无可领（${why || '列表为空'}）`)
-        return
+      } else {
+        for (const c of r.claimed) {
+          opts.log(`checkin scheduler: 已领取「${c.title}」${c.amount} 积分 (campaign=${c.campaignId})`)
+        }
       }
-      for (const c of r.claimed) {
-        opts.log(`checkin scheduler: 已领取「${c.title}」${c.amount} 积分 (campaign=${c.campaignId})`)
-      }
+      // 有渠道报出了「稍后再试」类原因（比如明明 claimable 却领取失败），
+      // 说明今天还没利索，下一分钟再瞅一眼。
+      settled = !r.skipped.some((x) => /失败|error|timeout|超时/i.test(x.reason))
     } catch (err) {
       opts.log(`checkin scheduler claim failed: ${String((err as Error)?.message ?? err)}`)
+      settled = false
     }
-    // 顺带看一眼有没有积分要到期 —— 签到是「赚」的一侧，这个管「会丢」的一侧。
-    // 放在同一个 tick 里是因为它俩本来就是一件事：今天该不该动账号。
     await reportExpiry(client)
+    return settled
   }
 
   const reportExpiry = async (client: MadaoClient) => {
@@ -128,20 +141,18 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
     }
   }
 
-  arm()
+  // 启动就检查一次：解决「10:05 关机、10:30 才开机」的情况
+  void tick().catch(() => {})
 
-  // 启动补偿 —— 这是「自动签到」能不能真正生效的关键。
-  //
-  // 只靠 arm() 的话：用户 10:05 关机，10:30 开机，定时器要等到**明天**
-  // 10:05 才动，今天这一轮就彻底错过了。所以启动时先立刻跑一轮：
-  // 当天已签的话 runOnce 里的 status 检查会直接跳过（只发一个 GET），
-  // 没签就顺手补上。代价极小，收益是「开机即补」。
-  void tick(/* skipRearm */ true).catch(() => {})
+  // 之后每分钟再瞄一眼（睡眠醒来 / 跨天都能自愈）
+  timer = setInterval(() => void tick().catch(() => {}), 60_000)
+  timer.unref?.()
+  opts.log(`checkin scheduler started; will run daily after local ${hour}:${String(minute).padStart(2, '0')}`)
 
   return {
     stop() {
       stopped = true
-      if (timer) clearTimeout(timer)
+      if (timer) clearInterval(timer)
       timer = undefined
       opts.log('checkin scheduler stopped')
     },
@@ -149,7 +160,7 @@ export function startCheckinScheduler(opts: SchedulerOptions): Scheduler {
       await runOnce()
     },
     nextRunAt() {
-      return nextAt
+      return nextRunFrom(new Date(), hour, minute)
     },
     lastExpiry() {
       return lastExpiry
