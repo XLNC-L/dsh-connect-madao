@@ -914,6 +914,29 @@ export async function claimCheckin(client: MadaoClient): Promise<CheckinState> {
  * 只领 MANUAL_CLAIM 且 claimable 的：AUTO_GRANT 是自动发放的，去 claim 反而错；
  * ENTRY 类（比如要报名/认证）不是我们能替用户做的，跳过。
  */
+/**
+ * 判断一个活动是不是「登录签到」类。
+ *
+ * 白名单优先：只放行明确认识的。宁可漏领一个陌生活动，也不替用户误报一次名。
+ *
+ * 判据（按可靠程度）：
+ *   1. type === 'USER_LOGIN'             —— 官方自己就是这么标签到的
+ *   2. extra.triggerEvent === 'user.login' —— 同上的点分小写写法
+ *   3. 标题带「签到」且不带报名/认证/注册 —— 前两个字段缺失时的兜底
+ *
+ * 已知的非签到类型（STUDENT_CERTIFIED / NEW_USER_REGISTER / INVITE_USER）
+ * 会被前三条自然排除，不需要单独黑名单。
+ */
+export function isCheckinCampaign(it: any): boolean {
+  const type = String(it?.type ?? '').toUpperCase()
+  const event = String(it?.extra?.triggerEvent ?? '').toLowerCase()
+  const title = String(it?.title ?? '')
+
+  if (type === 'USER_LOGIN') return true
+  if (event === 'user.login') return true
+  return /签到/.test(title) && !/报名|认证|注册|邀请/.test(title)
+}
+
 export async function claimAllCheckins(client: MadaoClient): Promise<{
   ok: boolean
   claimed: Array<{ campaignId: number; title: string; amount: number }>
@@ -935,9 +958,38 @@ export async function claimAllCheckins(client: MadaoClient): Promise<{
       skipped.push({ campaignId: id, title, reason: '自动发放，无需领取' })
       continue
     }
+    // 「已领未确认」的补一次 confirm —— 上一轮 claim 成功但 confirm 没跑通，
+    // 或者用户自己手动领过。这类不需要重新 claim，只推进状态。
+    if (it?.status === 'CLAIMED') {
+      const done = await confirmClaim(client, id)
+      skipped.push({
+        campaignId: id,
+        title,
+        reason: done ? '已补确认（此前已领未确认）' : '补确认失败，下轮再试',
+      })
+      continue
+    }
+
+    // 只领「登录签到」这一类，其余一律不替用户动。
+    //
+    // 为什么不能只看 claimable + status：如果官方把「点击即报名并发放积分」
+    // 做成同一个接口，未报名时也可能返回 ELIGIBLE + claimable=true，那样插件
+    // 就等于替用户签了赛事协议。报名/认证/邀请这类一次性动作不该自动化。
+    //
+    // 判据来自社区几个逆向项目抓到的真实报文（Coding2API / codearts2api /
+    // workbuddy2api）：签到活动 type=USER_LOGIN 且 extra.triggerEvent=user.login，
+    // 学生认证是 STUDENT_CERTIFIED / student.certified，注册礼是
+    // NEW_USER_REGISTER / user.register，邀请有礼是 INVITE_USER / invite.success。
+    if (!isCheckinCampaign(it)) {
+      skipped.push({
+        campaignId: id,
+        title,
+        reason: `非签到类活动，跳过自动领取（type=${it?.type ?? '-'}, event=${it?.extra?.triggerEvent ?? '-'}）`,
+      })
+      continue
+    }
+
     // 必须真的可领：claimable 为真且状态是 ELIGIBLE。
-    // 只信 claimable 一个布尔位不够 —— 上游将来若有活动把 claimable 默认设成
-    // true（比如「点击即视为同意协议」那种），这里会替用户把决定做了。
     if (!it?.claimable || it?.status !== 'ELIGIBLE') {
       skipped.push({
         campaignId: id,
@@ -956,6 +1008,10 @@ export async function claimAllCheckins(client: MadaoClient): Promise<{
       const ok = r?.code === 0
       chatLog(`claimAll ${ok ? 'OK' : 'FAIL'} campaign=${id} ${JSON.stringify(r?.data ?? r).slice(0, 160)}`)
       if (ok) {
+        // claim 之后必须再 confirm 一次，否则状态停在 CLAIMED（已领未确认）。
+        // 积分在 claim 时就已经到账，但 confirm 才是把状态推进到「已到账」，
+        // 缺了它网页端可能一直显示「待确认」，而且会被下一轮误判成可重试。
+        await confirmClaim(client, id)
         claimed.push({
           campaignId: id,
           title,
@@ -970,6 +1026,30 @@ export async function claimAllCheckins(client: MadaoClient): Promise<{
   }
 
   return { ok: true, claimed, skipped }
+}
+
+/**
+ * 把「已领未确认」推进到「已到账」。
+ *
+ * 上游的状态机是四态：ELIGIBLE → CLAIMED → CONFIRMED → CONSUMED。
+ * claim 只走到 CLAIMED，积分虽然已经到账，但状态还挂着「待确认」。
+ * 社区几个逆向项目（Coding2API / codearts2api / workbuddy2api）都碰到过
+ * 「claim 成功但 confirm 没做」导致网页端一直显示未完成，所以这里补上。
+ *
+ * confirm 失败**不代表丢积分**（claim 时已到账），所以只记日志不抛错，
+ * 让下一轮看到 status===CLAIMED 时再补一次。
+ */
+export async function confirmClaim(client: MadaoClient, campaignId: number): Promise<boolean> {
+  try {
+    // body 只认 campaignId，多带 channel 会 400（实测 HDN.1000 unknown exception）
+    const r = (await client.postJson('/v1/ops/confirm', { campaignId })) as any
+    const ok = r?.code === 0
+    chatLog(`confirm ${ok ? 'OK' : 'FAIL'} campaign=${campaignId} ${JSON.stringify(r?.data ?? r).slice(0, 160)}`)
+    return ok
+  } catch (e) {
+    chatLog(`confirm ERROR campaign=${campaignId} ${String((e as Error)?.message ?? e).slice(0, 160)}`)
+    return false
+  }
 }
 
 /** 读积分额度。失败返回 null，不影响其它诊断项。 */
