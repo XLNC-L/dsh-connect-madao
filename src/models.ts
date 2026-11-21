@@ -7,7 +7,7 @@
  *
  * 合并结果用于三处：
  *   - `/v1/models`（给 DSH 前端与诊断用）
- *   - 自动生成的 `cordis.patch.yml`（给 pi-ai 的 provider 配置）
+ *   - 通过 ConfigEditor 合并的 pi-ai provider 配置
  *   - 设置面板的模型表
  *
  * 这样用户装完插件即可用，不必手写十几个模型的 YAML。

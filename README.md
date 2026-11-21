@@ -73,10 +73,12 @@ STS 由插件调 IAM 自动换取并按期续租；模型清单在每次启动�
 
 1. 起本地桥接服务 `http://127.0.0.1:8765/v1`
 2. 从网关拉当前模型清单（含倍率、是否多模态、可选思考强度）
-3. 按拉到的结果重写插件自带的 `cordis.patch.yml`
+3. 通过 DSH ConfigEditor 把 `madao` 合并到 `llm-pi-ai.providers`，保留继承层和当前配置中的其他渠道
 4. 把 `madao` provider 注册进 DSH
 
-**不需要手写任何 YAML**，上游上新模型或调价，重启即同步。
+**不需要手写任何 YAML**，上游上新模型或调价，重启即同步。目录不变时不会重复写入；更改桥接端口后会同步本插件管理的渠道地址。若同名 `madao` 渠道由用户自行配置，插件会保留并在日志中提示冲突。
+
+此同步使用 DSH 的 `configEditor.configuration()` / `edit()` 接口，已按 DSH 0.2.2-rc.5 核对。自动同步需要 ConfigEditor 服务；缺少该服务时插件不会激活。若服务拒绝配置写入，日志会记录失败，本地桥接仍可使用。同步的渠道保存在 profile 中；停用或卸载插件后，如不再使用码道，请在模型设置中手动移除该渠道。
 
 ### 3. 验证
 
@@ -88,8 +90,14 @@ STS 由插件调 IAM 自动换取并按期续租；模型清单在每次启动�
 ```bash
 node lib/bin.js doctor        # 四步自检
 node lib/bin.js models        # 打印网关当前模型清单
-node lib/bin.js models --write # 顺手把清单写回 patch
+node lib/bin.js models --write # 刷新插件条目补丁；模型目录由插件启动时通过 ConfigEditor 合并
 ```
+
+### 远程打开 DSH 网页
+
+设置面板和输入框状态胶囊通过 DSH 当前页面的同源 `/api/madao-bridge` 发请求，DSH 在认证后把允许的设置和诊断操作转发到宿主机上的本地桥接。远程浏览器不再访问自己机器上的 `127.0.0.1:8765`，也不需要把桥接端口开放到网络。
+
+需要 DSH Web Host 支持 `connection.fetch.register` 的精确 API 路由；接口已按 DSH 0.2.2-rc.5 核对。通过远程网页保存 AK/SK 前请使用可信的 HTTPS 入口；凭证保存在运行 DSH 的机器上。
 
 ### 4. 手动接入（不走插件）
 
@@ -171,7 +179,7 @@ lib/              构建产物
   - `GLM-5.3` / `GLM-5.3-Flash` / `DeepSeek-V4.1-Flash`(含 1017) / `Kimi-K3`(含 3.1-Pro)：
     `low` / `high` / `max`（梯度明显：295 → 330 → 684 字）
 
-  插件每次启动重新拉取档位列表，`cordis.patch.yml` 随之刷新。
+  插件每次启动重新拉取档位列表，并通过 DSH ConfigEditor 更新模型目录。
 - **工具调用（tool_calls）已支持**（0.4.1 起）：早期版本只转发 `content` 和
   `reasoning_content`，把 `tool_calls` 帧整个丢掉了。表现是 `finish_reason: "tool_calls"`
   但 `content` 为空，客户端只看到「有思考、没内容」，于是判定异常并中断 ——

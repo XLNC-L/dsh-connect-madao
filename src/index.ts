@@ -1,31 +1,21 @@
 /**
- * 宿主侧（Node）插件入口。
- *
- * 职责两条：
- *   1. 起一个本地 OpenAI 兼容桥接服务
- *   2. 启动时从码道网关拉模型清单，自动重写插件自带的 cordis.patch.yml
- *
- *   DSH (dsh-llm-pi-ai, openai-completions)
- *     └─▶ http://127.0.0.1:8765/v1        ← 本插件
- *           └─▶ 码道网关（SDK-HMAC + P-256 + SM4-GCM）
- *
- * 用户侧零配置：装上插件、填 AK/SK 即可。模型清单不需要手写，
- * 上游上新模型或调价后重启 DSH 会自动同步。
+ * Host plugin: start the loopback OpenAI bridge, merge its model catalog into
+ * DSH through ConfigEditor while preserving existing provider routes, and
+ * register the authenticated remote settings forwarder.
  */
-
 import { startServer, type RunningServer } from './server.ts'
 import { loadCredentials, DEFAULT_CRED_PATH } from './credentials.ts'
 import { StsProvider } from './sts-provider.ts'
 import { MadaoClient } from './client.ts'
 import { discoverModels, FALLBACK_MODELS, type ModelInfo } from './models.ts'
-import { syncPatch } from './host-patch.ts'
-import { appendFileSync, mkdirSync, existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { syncMadaoProviderConfig } from './provider-profile.ts'
+import { registerRemoteBridge } from './remote-bridge.ts'
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-connect-madao'
-export const inject: string[] = []
+export const inject: string[] = ['connection', 'configEditor']
 
 export const PROVIDER = 'madao'
 
@@ -41,28 +31,13 @@ function diag(line: string): void {
   } catch {}
 }
 
-/**
- * 插件自带的 patch 文件位置。
- *
- * 打包后本文件是 `lib/index.js`，patch 在包根目录，所以上跳一层。
- * 找不到时退回 cwd 下的同名文件。
- */
-function patchPath(): string {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url))
-    const candidate = join(here, '..', 'cordis.patch.yml')
-    if (existsSync(candidate) || existsSync(dirname(candidate))) return candidate
-  } catch {}
-  return join(process.cwd(), 'cordis.patch.yml')
-}
-
 export interface MadaoConfig {
   enabled?: boolean
   port?: number
   gateway?: string
   ak?: string
   sk?: string
-  /** 是否在启动时把模型清单写回 patch（默认 true） */
+  /** 是否在启动时从网关刷新目录；false 使用兜底目录（默认 true） */
   autoSyncModels?: boolean
 }
 
@@ -75,52 +50,41 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
 
   const port = config.port ?? 8765
   let server: RunningServer | undefined
+  let disposed = false
+  // Only forward remote settings once this plugin's own bridge is listening, so
+  // credentials are never sent to another process occupying the port.
+  registerRemoteBridge(ctx, port, () => !disposed && server?.server.listening === true)
 
   if (config.ak && config.sk) {
     process.env.MADAO_AK = config.ak
     process.env.MADAO_SK = config.sk
   }
 
-  // 生命周期绑定：不因 effect 用法差异导致整个 apply 抛错
-  try {
-    if (typeof ctx?.effect === 'function') {
-      ctx.effect(
-        () => () => {
-          void server?.close().catch(() => {})
-          server = void 0
-          diag('disposed')
-        },
-        'dsh-connect-madao: local OpenAI bridge',
-      )
-      diag('ctx.effect registered')
-    } else {
-      diag('ctx.effect unavailable (no disposal hook)')
-    }
-  } catch (err) {
-    diag(`ctx.effect threw: ${String(err)}`)
-  }
+  ctx.effect(
+    () => async () => {
+      disposed = true
+      const running = server
+      server = undefined
+      await running?.close().catch(() => {})
+      diag('disposed')
+    },
+    'dsh-connect-madao: local OpenAI bridge',
+  )
 
-  // 启动时拉一次清单并写回 patch。失败一律降级，绝不阻断桥接服务。
-  const syncModels = async (): Promise<ModelInfo[]> => {
-    if (config.autoSyncModels === false) {
-      diag('autoSyncModels disabled, keep patch as-is')
-      return FALLBACK_MODELS
-    }
+  // Discovery failure falls back to the shipped catalog without blocking the bridge.
+  const discover = async (): Promise<ModelInfo[]> => {
+    if (config.autoSyncModels === false) return FALLBACK_MODELS
     try {
       const loaded = await loadCredentials()
+      if (disposed) return FALLBACK_MODELS
       let creds = loaded.key
       if (!creds.securityToken) {
         const sts = new StsProvider({ ak: creds.ak, sk: creds.sk })
         creds = await sts.credentials()
       }
+      if (disposed) return FALLBACK_MODELS
       const client = new MadaoClient({ credentials: creds, gateway: config.gateway })
-      const found = await discoverModels(client)
-      const target = patchPath()
-      const r = syncPatch(target, found.models)
-      if (r.error) diag(`patch sync error: ${r.error}`)
-      else if (r.changed) diag(`patch updated: ${r.models} models → ${r.path}（重启 DSH 后生效）`)
-      else diag(`patch unchanged (${r.models} models, source=${found.source})`)
-      return found.models
+      return (await discoverModels(client)).models
     } catch (err) {
       diag(`model discovery skipped: ${String((err as Error)?.message ?? err)}`)
       return FALLBACK_MODELS
@@ -129,8 +93,20 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
 
   void (async () => {
     try {
-      const models = await syncModels()
-
+      const models = await discover()
+      if (disposed) return
+      try {
+        const result = await syncMadaoProviderConfig(ctx, models, port, () => !disposed)
+        if (disposed) return
+        diag(result.conflict
+          ? 'provider config unchanged: an existing madao route is not managed by this plugin'
+          : result.updated
+            ? `provider config merged (${models.length} models; existing channels preserved)`
+            : `provider config unchanged (${models.length} models)`)
+      } catch (err) {
+        diag(`provider config sync failed: ${String((err as Error)?.message ?? err)}`)
+      }
+      if (disposed) return
       let hint = '未配置（请求会返回 503）'
       try {
         await loadCredentials()
@@ -138,8 +114,15 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
       } catch (err) {
         diag(`loadCredentials failed: ${String(err)}`)
       }
-
-      server = await startServer({ port, host: '127.0.0.1', gateway: config.gateway, models })
+      if (disposed) return
+      const started = await startServer({ port, host: '127.0.0.1', gateway: config.gateway, models })
+      // startServer itself awaits credentials and listen(); unloading during
+      // those awaits must not leave a newly listening server behind.
+      if (disposed) {
+        await started.close()
+        return
+      }
+      server = started
       diag(`bridge ready at ${server.url}/v1 (models=${models.length}, credentials: ${hint})`)
     } catch (err) {
       diag(`bridge failed to start: ${String((err as Error)?.stack ?? err)}`)

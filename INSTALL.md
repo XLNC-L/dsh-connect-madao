@@ -116,7 +116,7 @@ D:\plugins\dsh-connect-madao-0.1.0.tgz
 
 - 把包写进 profile 的 `dependencies`
 - 因为有 `dsh.bundle` 字段，自动加进 `dsh.profile.bundles`
-- 应用插件自带的 `cordis.patch.yml`，注册 `madao` provider
+- 应用插件自带的 `cordis.patch.yml` 加载插件；插件通过 DSH ConfigEditor 合并注册 `madao` provider，保留已有渠道
 
 ---
 
@@ -265,7 +265,7 @@ AK/SK 没读到。检查设置页是否保存成功，或 `credentials.json` 是
 IAM 换 STS 太频繁被限流。等约 1 分钟。插件已做缓存和提前续期，正常用不会碰到。
 
 **端口 8765 被占？**
-插件配置里改 `port`。注意 `cordis.patch.yml` 里 provider 的 `baseURL` 也要跟着改。
+插件配置里改 `port`，重启插件后会同步本插件管理的 `madao` 渠道地址，无需修改 bundle 补丁。
 
 **想换 AK/SK？**
 设置页直接改，保存后点「测试并刷新额度」即可，不用重启。

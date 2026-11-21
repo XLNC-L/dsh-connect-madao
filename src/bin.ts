@@ -108,7 +108,7 @@ async function cmdDoctor(): Promise<void> {
  * 打印模型清单。
  *
  * 默认打网关实时结果（与 DSH 里看到的完全一致）；
- * 加 `--write` 则顺手把清单写回插件自带的 cordis.patch.yml。
+ * 加 `--write` 则刷新插件条目补丁；模型目录由插件启动时通过 ConfigEditor 合并。
  */
 async function cmdModels(): Promise<void> {
   const write = process.argv.includes('--write')
@@ -143,7 +143,7 @@ async function cmdModels(): Promise<void> {
       const here = dirname(fileURLToPath(import.meta.url))
       const target = join(here, '..', 'cordis.patch.yml')
       const r = syncPatch(target, found.models)
-      console.log(r.error ? `\n写回失败：${r.error}` : `\n${r.changed ? '已写入' : '无变化'} → ${r.path}`)
+      console.log(r.error ? `\n写回失败：${r.error}` : `\n${r.changed ? '已写入' : '无变化'} → ${r.path}（仅插件条目；重启 DSH 后同步模型目录）`)
     }
   } catch (e) {
     console.error(`读取模型清单失败：${String((e as Error)?.message ?? e)}`)

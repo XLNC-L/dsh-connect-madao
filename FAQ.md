@@ -182,7 +182,7 @@ failed to decode image: invalid or unsupported image format
 所以：**要明显改变思考深度，用三档模型并选 `low` 或 `max`**；GLM-5.2 那两个只适合微调。
 
 档位列表由网关动态下发（`POST /v1/model/thinking-variants`），码道更新后可能增加 ——
-插件每次启动重新拉取，`cordis.patch.yml` 会随之刷新。
+插件每次启动重新拉取，并通过 DSH ConfigEditor 合并更新 `madao` 模型目录，保留其他渠道；bundle 补丁只保留插件条目。
 
 ---
 
