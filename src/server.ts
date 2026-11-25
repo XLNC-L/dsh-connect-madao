@@ -54,7 +54,7 @@ export interface RunningServer {
 
 /** 码道可用模型（实测自 /v1/model/builtin）。 */
 
-interface Ctx {
+export interface Ctx {
   client: MadaoClient | null
   sts: StsProvider | null
   loaded: LoadResult | null
