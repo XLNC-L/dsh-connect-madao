@@ -8,6 +8,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { bridgeJson, bridgePost, type HealthPayload } from './bridge.ts'
+import {
+  getAutoCheckinState,
+  getSettings,
+  loadSettings,
+  saveSettings,
+  subscribeSettings,
+  type AutoCheckinState,
+  type SettingsPayload,
+} from './settings.ts'
 
 /** 与 server.ts 的 KNOWN_MODELS 保持一致；前端只做展示，真实清单从 /v1/models 拉。 */
 const FALLBACK_MODELS = [
@@ -26,18 +35,18 @@ const FALLBACK_MODELS = [
 
 const S = {
   root: {
-    border: '1px solid var(--dsh-border, #333)',
+    border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
     borderRadius: 10,
     padding: 16,
     fontFamily: 'inherit',
     fontSize: 13,
-    color: 'var(--dsh-fg, #ddd)',
+    color: 'var(--dsw-alias-label-primary, #0f1115)',
   } as const,
   // 账号详情区块
   section: {
     marginTop: 16,
     paddingTop: 14,
-    borderTop: '1px solid var(--dsh-border, #333)',
+    borderTop: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
   } as const,
   sectionTitle: {
     display: 'flex',
@@ -53,13 +62,13 @@ const S = {
     gap: '5px 14px',
     alignItems: 'center',
   } as const,
-  detailKey: { fontSize: 11, opacity: 0.55 } as const,
+  detailKey: { fontSize: 11, color: 'var(--dsw-alias-label-secondary, #61666b)' } as const,
   detailVal: { fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' } as const,
   miniBtn: {
     background: 'none',
-    border: '1px solid var(--dsh-border, #333)',
+    border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
     borderRadius: 5,
-    color: 'inherit',
+    color: 'var(--dsw-alias-label-primary, #0f1115)',
     fontSize: 11,
     padding: '1px 8px',
     cursor: 'pointer',
@@ -78,9 +87,9 @@ const S = {
     fontWeight: 700,
     fontSize: 15,
   } as const,
-  title: { fontSize: 15, fontWeight: 600, margin: 0 } as const,
-  sub: { fontSize: 12, opacity: 0.65, margin: '3px 0 0' } as const,
-  tabs: { display: 'flex', gap: 4, borderBottom: '1px solid var(--dsh-border, #333)', marginBottom: 14 } as const,
+  title: { fontSize: 15, fontWeight: 600, margin: 0, color: 'var(--dsw-alias-label-primary, #0f1115)' } as const,
+  sub: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, #61666b)', margin: '3px 0 0' } as const,
+  tabs: { display: 'flex', gap: 4, borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))', marginBottom: 14 } as const,
   tab: (active: boolean) =>
     ({
       padding: '7px 12px',
@@ -88,20 +97,20 @@ const S = {
       background: 'transparent',
       border: 'none',
       borderBottom: active ? '2px solid #c7000b' : '2px solid transparent',
-      color: active ? 'var(--dsh-fg,#fff)' : 'var(--dsh-muted,#888)',
+      color: active ? 'var(--dsw-alias-label-primary, #0f1115)' : 'var(--dsw-alias-label-secondary, #61666b)',
       fontWeight: active ? 600 : 400,
       fontSize: 13,
       fontFamily: 'inherit',
     }) as const,
   field: { marginBottom: 12 } as const,
-  label: { display: 'block', marginBottom: 5, fontSize: 12, opacity: 0.8 } as const,
+  label: { display: 'block', marginBottom: 5, fontSize: 12, color: 'var(--dsw-alias-label-secondary, #61666b)' } as const,
   input: {
     width: '100%',
     padding: '7px 9px',
     borderRadius: 6,
-    border: '1px solid var(--dsh-border, #3a3a3a)',
-    background: 'var(--dsh-input-bg, #1b1b1b)',
-    color: 'inherit',
+    border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
+    background: 'var(--dsw-alias-bg-layer-2, #f4f5f7)',
+    color: 'var(--dsw-alias-label-primary, #0f1115)',
     fontFamily: 'monospace',
     fontSize: 12,
     boxSizing: 'border-box',
@@ -112,16 +121,16 @@ const S = {
       padding: '7px 14px',
       borderRadius: 6,
       cursor: 'pointer',
-      border: primary ? 'none' : '1px solid var(--dsh-border,#3a3a3a)',
+      border: primary ? 'none' : '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
       background: primary ? '#c7000b' : 'transparent',
-      color: primary ? '#fff' : 'inherit',
+      color: primary ? '#fff' : 'var(--dsw-alias-label-primary, #0f1115)',
       fontSize: 12,
       fontFamily: 'inherit',
     }) as const,
-  hint: { fontSize: 12, opacity: 0.6, lineHeight: 1.6, margin: '0 0 14px' } as const,
+  hint: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, #61666b)', lineHeight: 1.6, margin: '0 0 14px' } as const,
   table: { width: '100%', borderCollapse: 'collapse' as const, fontSize: 12 },
-  th: { textAlign: 'left' as const, padding: '7px 8px', borderBottom: '1px solid var(--dsh-border,#333)', opacity: 0.7, fontWeight: 500 },
-  td: { padding: '7px 8px', borderBottom: '1px solid var(--dsh-border,#2a2a2a)' },
+  th: { textAlign: 'left' as const, padding: '7px 8px', borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))', color: 'var(--dsw-alias-label-secondary, #61666b)', fontWeight: 500 },
+  td: { padding: '7px 8px', borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))' },
   step: (state: string) =>
     ({
       display: 'flex',
@@ -136,13 +145,50 @@ const S = {
       height: 7,
       borderRadius: '50%',
       flex: '0 0 auto',
-      background: state === 'ok' ? '#2ea043' : state === 'fail' ? '#d1242f' : state === 'run' ? '#d29922' : '#555',
+      background:
+        state === 'ok'
+          ? 'var(--dsw-alias-state-success-primary, #2ea043)'
+          : state === 'fail'
+            ? 'var(--dsw-alias-state-error-primary, #d1242f)'
+            : state === 'run'
+              ? 'var(--dsw-alias-state-warn-primary, #d29922)'
+              : 'var(--dsw-alias-label-tertiary, #81858c)',
     }) as const,
   kv: { display: 'grid', gridTemplateColumns: '110px 1fr', gap: '6px 12px', fontSize: 12, lineHeight: 1.7 } as const,
-  kvk: { opacity: 0.6 } as const,
+  kvk: { color: 'var(--dsw-alias-label-secondary, #61666b)' } as const,
+  // 开关行：文字在左、开关在右
+  uiRow: { display: 'flex', alignItems: 'center', gap: 12 } as const,
+  switch: (on: boolean, busy: boolean) =>
+    ({
+      flex: '0 0 auto',
+      position: 'relative',
+      width: 38,
+      height: 22,
+      padding: 0,
+      borderRadius: 11,
+      border: 'none',
+      cursor: busy ? 'default' : 'pointer',
+      opacity: busy ? 0.6 : 1,
+      background: on
+        ? 'var(--dsw-alias-state-success-primary, #2ea043)'
+        : 'var(--dsw-alias-label-tertiary, #81858c)',
+      transition: 'background .15s ease',
+    }) as const,
+  knob: (on: boolean) =>
+    ({
+      position: 'absolute',
+      top: 3,
+      left: on ? 19 : 3,
+      width: 16,
+      height: 16,
+      borderRadius: '50%',
+      background: '#fff',
+      boxShadow: '0 1px 3px rgba(0,0,0,.35)',
+      transition: 'left .15s ease',
+    }) as const,
 }
 
-type Tab = 'account' | 'models' | 'diagnostics' | 'about'
+type Tab = 'account' | 'interface' | 'models' | 'diagnostics' | 'about'
 
 export interface PanelProps {
   t: (key: string, vars?: Record<string, unknown>) => string
@@ -168,6 +214,67 @@ export function CodeArtsPanel({ t }: PanelProps) {
   /** 每日签到状态（GET 只查不领） */
   const [checkin, setCheckin] = useState<any>(null)
   const [checkinBusy, setCheckinBusy] = useState(false)
+
+  /** 界面设置（胶囊显隐、自动签到）。宿主是权威源，这里只是镜像。 */
+  const [uiSettings, setUiSettings] = useState<SettingsPayload>(getSettings())
+  const [uiSaving, setUiSaving] = useState(false)
+  const [uiError, setUiError] = useState<string | null>(null)
+  const [autoState, setAutoState] = useState<AutoCheckinState | null>(getAutoCheckinState())
+  const [autoBusy, setAutoBusy] = useState(false)
+
+  // 与胶囊共用同一个 store：任一组件改动都会广播到这里。
+  useEffect(() => {
+    const stop = subscribeSettings((next) => {
+      setUiSettings(next)
+      setAutoState(getAutoCheckinState())
+    })
+    void loadSettings()
+    return stop
+  }, [])
+
+  // 自动签到开着时，每 30 秒问一次运行状态，让「上次：…」能自己更新。
+  useEffect(() => {
+    if (!uiSettings.autoCheckin) return
+    const timer = setInterval(() => {
+      void loadSettings()
+    }, 30_000)
+    return () => clearInterval(timer)
+  }, [uiSettings.autoCheckin])
+
+  const toggleComposerChip = useCallback(async (next: boolean) => {
+    setUiSaving(true)
+    setUiError(null)
+    setUiSettings({ ...getSettings(), composerChip: next })
+    try {
+      await saveSettings({ composerChip: next })
+    } catch (e) {
+      setUiSettings({ ...getSettings(), composerChip: !next })
+      setUiError(String((e as Error)?.message ?? e))
+    } finally {
+      setUiSaving(false)
+    }
+  }, [])
+
+  const toggleAutoCheckin = useCallback(async (next: boolean) => {
+    setAutoBusy(true)
+    setUiError(null)
+    setUiSettings({ ...getSettings(), autoCheckin: next })
+    try {
+      await saveSettings({ autoCheckin: next })
+      setAutoState(getAutoCheckinState())
+      if (next) {
+        // 打开后宿主会立刻跑一轮；稍等一下再取，用户能马上看到结果。
+        setTimeout(() => {
+          void loadSettings()
+        }, 1_500)
+      }
+    } catch (e) {
+      setUiSettings({ ...getSettings(), autoCheckin: !next })
+      setUiError(String((e as Error)?.message ?? e))
+    } finally {
+      setAutoBusy(false)
+    }
+  }, [])
 
   const loadCheckin = useCallback(async () => {
     try {
@@ -379,6 +486,7 @@ export function CodeArtsPanel({ t }: PanelProps) {
 
       <div style={S.tabs}>
         {tabBtn('account', t('tab.account'))}
+        {tabBtn('interface', t('tab.interface'))}
         {tabBtn('models', t('tab.models'))}
         {tabBtn('diagnostics', t('tab.diagnostics'))}
         {tabBtn('about', t('tab.about'))}
@@ -435,24 +543,27 @@ export function CodeArtsPanel({ t }: PanelProps) {
                         borderRadius: 6,
                         background: r.active ? 'rgba(46,160,67,0.10)' : 'transparent',
                         border: r.active ? '1px solid rgba(46,160,67,0.35)' : '1px solid transparent',
-                        color: r.active ? 'inherit' : 'var(--fg-muted, #8b949e)',
+                        color: r.active ? 'var(--dsw-alias-label-primary, #0f1115)' : 'var(--dsw-alias-label-secondary, #61666b)',
                       }}
                     >
-                      <span style={{ opacity: 0.6, minWidth: 14 }}>{i + 1}.</span>
+                      <span style={{ color: 'var(--dsw-alias-label-secondary, #61666b)', minWidth: 14 }}>{i + 1}.</span>
                       <span style={{ flex: 1 }}>{r.label}</span>
                       {r.extra && (
                         <span
                           style={{
                             fontSize: 11,
                             fontWeight: expired || urgent ? 600 : 400,
-                            color: expired ? '#d1242f' : urgent ? '#d1242f' : '#d29922',
+                            color:
+                              expired || urgent
+                                ? 'var(--dsw-alias-state-error-primary, #d1242f)'
+                                : 'var(--dsw-alias-state-warn-primary, #d29922)',
                           }}
                         >
                           {r.extra}
                         </span>
                       )}
                       {r.active && (
-                        <span style={{ fontSize: 11, color: '#2ea043', fontWeight: 600 }}>
+                        <span style={{ fontSize: 11, color: 'var(--dsw-alias-state-success-primary, #2ea043)', fontWeight: 600 }}>
                           {t('account.sourceActive')}
                         </span>
                       )}
@@ -467,14 +578,14 @@ export function CodeArtsPanel({ t }: PanelProps) {
 
             {/* 两段常被问到的说明：AK/SK 从哪弄、第 3 项到底怎么工作的 */}
             <details style={{ marginTop: 10 }}>
-              <summary style={{ fontSize: 12, cursor: 'pointer', opacity: 0.85 }}>
+              <summary style={{ fontSize: 12, cursor: 'pointer', color: 'var(--dsw-alias-label-secondary, #61666b)' }}>
                 {t('account.howToGetAk')}
               </summary>
               <p style={{ ...S.hint, marginTop: 6, marginBottom: 0 }}>{t('account.howToGetAkSteps')}</p>
             </details>
 
             <details style={{ marginTop: 6 }}>
-              <summary style={{ fontSize: 12, cursor: 'pointer', opacity: 0.85 }}>
+              <summary style={{ fontSize: 12, cursor: 'pointer', color: 'var(--dsw-alias-label-secondary, #61666b)' }}>
                 {t('account.howCodeartsWorks')}
               </summary>
               <p style={{ ...S.hint, marginTop: 6, marginBottom: 0 }}>{t('account.howCodeartsWorksDesc')}</p>
@@ -511,7 +622,16 @@ export function CodeArtsPanel({ t }: PanelProps) {
               {testing ? t('account.testing') : t('account.test')}
             </button>
             {testResult && (
-              <span style={{ fontSize: 12, color: testResult.ok ? '#2ea043' : '#d1242f' }}>{testResult.message}</span>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: testResult.ok
+                    ? 'var(--dsw-alias-state-success-primary, #2ea043)'
+                    : 'var(--dsw-alias-state-error-primary, #d1242f)',
+                }}
+              >
+                {testResult.message}
+              </span>
             )}
           </div>
 
@@ -561,7 +681,10 @@ export function CodeArtsPanel({ t }: PanelProps) {
                     <span
                       style={{
                         ...S.detailVal,
-                        color: acct.creditExpiry.level === 'urgent' || acct.creditExpiry.level === 'warn' ? '#d1242f' : '#d29922',
+                        color:
+                          acct.creditExpiry.level === 'urgent' || acct.creditExpiry.level === 'warn'
+                            ? 'var(--dsw-alias-state-error-primary, #d1242f)'
+                            : 'var(--dsw-alias-state-warn-primary, #d29922)',
                       }}
                     >
                       {acct.creditExpiry.message}
@@ -609,6 +732,73 @@ export function CodeArtsPanel({ t }: PanelProps) {
             ) : (
               <div style={S.hint}>{checkin?.reason ?? t("checkin.unavailable")}</div>
             )}
+
+            {/* 自动签到：默认关闭，打开后由宿主侧调度器每分钟检查一次。
+                放在签到区里而不是另开一页 —— 用户看到「领取」按钮的同时
+                就能决定要不要让它自动跑。 */}
+            <div
+              style={{
+                ...S.uiRow,
+                marginTop: 12,
+                paddingTop: 12,
+                borderTop: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12 }}>{t('checkin.auto')}</div>
+                <div style={{ ...S.hint, margin: '2px 0 0', fontSize: 11 }}>{t('checkin.autoHint')}</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={uiSettings.autoCheckin ? 'true' : 'false'}
+                aria-label={t('checkin.auto')}
+                style={S.switch(uiSettings.autoCheckin, autoBusy)}
+                disabled={autoBusy}
+                onClick={() => void toggleAutoCheckin(!uiSettings.autoCheckin)}
+              >
+                <span style={S.knob(uiSettings.autoCheckin)} />
+              </button>
+            </div>
+            {uiSettings.autoCheckin && (
+              <div style={{ ...S.hint, margin: '8px 0 0', fontSize: 11 }}>
+                {autoState?.lastMessage
+                  ? `${t('checkin.autoLast')}${autoState.lastMessage}`
+                  : t('checkin.autoIdle')}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === 'interface' && (
+        <div>
+          <p style={{ ...S.hint, marginTop: 0 }}>{t('ui.hint')}</p>
+
+          <div style={S.section}>
+            <div style={S.sectionTitle}>{t('ui.chipSection')}</div>
+            <div style={S.uiRow}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12 }}>{t('ui.composerChip')}</div>
+                <div style={{ ...S.hint, margin: '2px 0 0', fontSize: 11 }}>{t('ui.composerChipHint')}</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={uiSettings.composerChip ? 'true' : 'false'}
+                aria-label={t('ui.composerChip')}
+                style={S.switch(uiSettings.composerChip, uiSaving)}
+                disabled={uiSaving}
+                onClick={() => void toggleComposerChip(!uiSettings.composerChip)}
+              >
+                <span style={S.knob(uiSettings.composerChip)} />
+              </button>
+            </div>
+            {uiError && (
+              <div style={{ marginTop: 8, fontSize: 11, color: 'var(--dsw-alias-state-error-primary, #d1242f)' }}>
+                {t('ui.saveFail')} · {uiError}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -632,12 +822,18 @@ export function CodeArtsPanel({ t }: PanelProps) {
               {models.map((m: any) => (
                 <tr key={m.id}>
                   <td style={S.td} title={m.description ?? undefined}>{m.name}</td>
-                  <td style={{ ...S.td, fontFamily: 'monospace', opacity: 0.65, fontSize: 11 }}>{m.id}</td>
+                  <td style={{ ...S.td, fontFamily: 'monospace', color: 'var(--dsw-alias-label-secondary, #61666b)', fontSize: 11 }}>
+                    {m.id}
+                  </td>
                   <td style={S.td}>{(m.context ?? m.context_window ?? 0).toLocaleString()}</td>
                   <td style={S.td}>{(m.maxOutput ?? m.max_output_tokens ?? 0).toLocaleString()}</td>
                   <td style={{ ...S.td, fontFamily: 'monospace' }}>{m.ratio ?? '—'}</td>
                   <td style={S.td} title={(m.supportsImages ?? m.supports_images) ? t('models.visionYes') : t('models.visionNo')}>
-                    {(m.supportsImages ?? m.supports_images) ? '👁' : <span style={{ opacity: 0.25 }}>—</span>}
+                    {(m.supportsImages ?? m.supports_images) ? (
+                      '👁'
+                    ) : (
+                      <span style={{ color: 'var(--dsw-alias-label-secondary, #61666b)' }}>—</span>
+                    )}
                   </td>
                   <td style={{ ...S.td, fontSize: 11, opacity: m.strengths?.length ? 1 : 0.25 }}>
                     {m.strengths?.length ? m.strengths.join(' / ') : '—'}
@@ -669,7 +865,7 @@ export function CodeArtsPanel({ t }: PanelProps) {
               <div key={key} style={S.step(diag[key] ?? 'idle')}>
                 <span style={S.dot(diag[key] ?? 'idle')} />
                 <span style={{ flex: 1 }}>{label}</span>
-                <span style={{ opacity: 0.5, fontSize: 11 }}>
+                <span style={{ color: 'var(--dsw-alias-label-secondary, #61666b)', fontSize: 11 }}>
                   {diag[key] === 'ok' ? '✓' : diag[key] === 'fail' ? '✗' : diag[key] === 'run' ? '…' : '—'}
                 </span>
               </div>

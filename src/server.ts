@@ -24,6 +24,8 @@ import { parseStsIdentity } from './identity.ts'
 import { evaluateExpiry } from './credit-expiry.ts'
 import { claimAllCheckins, claimCheckin, queryCheckin, type CheckinState } from './checkin.ts'
 import { chatLog, logDir } from './protocol/log.ts'
+import { patchSettings, readSettings } from './settings.ts'
+import type { AutoCheckinScheduler } from './auto-checkin.ts'
 
 export { chatLog }
 
@@ -41,6 +43,13 @@ export interface RunningServer {
   port: number
   url: string
   close(): Promise<void>
+  /**
+   * 桥接内部的 ctx。
+   *
+   * 自动签到的调度器要复用同一份已登录客户端（含 STS 续期），否则两条链路
+   * 会各自换 STS，撞上 IAM 的频率限制。
+   */
+  ctx: Ctx
 }
 
 /** 码道可用模型（实测自 /v1/model/builtin）。 */
@@ -54,6 +63,8 @@ interface Ctx {
   models: ModelInfo[]
   /** 上次用于构造 client 的凭证引用，用于判断是否需要重建 */
   lastCreds?: unknown
+  /** 自动签到调度器（由 index.ts 在桥接起来后挂上并启动） */
+  autoCheckin?: AutoCheckinScheduler
 }
 
 /**
@@ -80,6 +91,17 @@ async function ensureFreshClient(ctx: Ctx): Promise<void> {
   } catch (e) {
     chatLog(`STS refresh failed: ${String((e as Error)?.message ?? e).slice(0, 160)}`)
   }
+}
+
+/**
+ * 给自动签到调度器取「当前可用的客户端」。
+ *
+ * 先续一次 STS（`ensureFreshClient`），再返回；凭据没就绪时返回 null 而不是
+ * 抛错 —— 那不是故障，只是桥接还在初始化。
+ */
+export async function borrowClient(ctx: Ctx): Promise<MadaoClient | null> {
+  await ensureFreshClient(ctx)
+  return ctx.client
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<RunningServer> {
@@ -167,6 +189,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     port: actualPort,
     url: `http://${host}:${actualPort}`,
     close: () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
+    ctx,
   }
 }
 
@@ -187,6 +210,52 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
     return json(res, 200, await healthz(ctx))
+  }
+
+  // 界面设置：输入框胶囊显隐、自动签到开关。
+  //
+  // 走桥接而不是 DSH 的插件 config，是因为这两个开关要求「点一下立刻生效」——
+  // 写 config 会触发插件重载，把桥接服务和在途对话一起掀掉。
+  //
+  // GET 顺带返回自动签到的运行状态（上次跑了没、领到多少），面板据此显示
+  // 「上次：已自动签到，+100 积分」。
+  if (url.pathname === '/settings' && (req.method === 'GET' || req.method === 'POST')) {
+    if (req.method === 'GET') {
+      const settings = await readSettings()
+      return json(res, 200, {
+        ok: true,
+        settings,
+        autoCheckin: ctx.autoCheckin ? ctx.autoCheckin.state() : null,
+      })
+    }
+    let payload: any = {}
+    try {
+      payload = JSON.parse(await readBody(req))
+    } catch {
+      return json(res, 400, { error: { message: '请求体不是合法 JSON' } })
+    }
+    const patch: { composerChip?: boolean; autoCheckin?: boolean } = {}
+    if (typeof payload.composerChip === 'boolean') patch.composerChip = payload.composerChip
+    if (typeof payload.autoCheckin === 'boolean') patch.autoCheckin = payload.autoCheckin
+    if (Object.keys(patch).length === 0) {
+      return json(res, 400, { error: { message: '没有可更新的字段' } })
+    }
+    try {
+      const settings = await patchSettings(patch)
+      // 等这一轮跑完再回包：否则前端拿到的是上一轮的状态，刚打开会显示「已关闭」。
+      if (ctx.autoCheckin) {
+        try {
+          await ctx.autoCheckin.tick()
+        } catch {}
+      }
+      return json(res, 200, {
+        ok: true,
+        settings,
+        autoCheckin: ctx.autoCheckin ? ctx.autoCheckin.state() : null,
+      })
+    } catch (e) {
+      return json(res, 500, { error: { message: `保存设置失败：${String((e as Error)?.message ?? e)}` } })
+    }
   }
 
   // 浮层用：账号 + 额度（额度每次现查）

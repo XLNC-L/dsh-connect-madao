@@ -18,6 +18,7 @@
 
 import { CodeArtsPanel } from './Panel.tsx'
 import { ComposerChip } from './ComposerChip.tsx'
+import { SettingsSectionIcon } from './SectionIcon.tsx'
 
 export const name = 'dsh-connect-madao-client'
 export const inject = ['slots', 'locale']
@@ -27,6 +28,7 @@ const zh = {
   'meta.title': '码道连接器',
   'meta.desc': '把华为云码道（CodeArts Agent）模型接入 DSH',
   'tab.account': '账号',
+  'tab.interface': '界面',
   'tab.models': '模型',
   'tab.diagnostics': '诊断',
   'tab.about': '关于',
@@ -82,6 +84,15 @@ const zh = {
   'checkin.allGot': '已领取 {n} 项活动',
   'checkin.allNone': '没有可领的活动',
   'checkin.expiring': '积分即将到期',
+  'checkin.auto': '自动签到',
+  'checkin.autoHint': '开启后，插件每分钟检查一次，发现当天可领就自动领取（每 15 分钟最多尝试一次）。默认关闭。',
+  'checkin.autoLast': '上次：',
+  'checkin.autoIdle': '还没有运行过，稍后自动检查。',
+  'ui.hint': '这里的开关点一下就生效，不需要重启 DSH。',
+  'ui.chipSection': '输入框状态胶囊',
+  'ui.composerChip': '显示输入框「码道」状态胶囊',
+  'ui.composerChipHint': '关掉后，输入框右侧那个「● 码道」小胶囊不再出现；账号与积分仍可在本页查看。',
+  'ui.saveFail': '保存失败',
   'models.title': '可用模型',
   'models.hint': '以下模型取自码道网关，共 {n} 个。',
   'models.name': '名称',
@@ -129,6 +140,7 @@ const en: Record<string, string> = {
   'meta.title': 'CodeArts Connector',
   'meta.desc': 'Bring Huawei Cloud CodeArts Agent models into DSH',
   'tab.account': 'Account',
+  'tab.interface': 'Interface',
   'tab.models': 'Models',
   'tab.diagnostics': 'Diagnostics',
   'tab.about': 'About',
@@ -184,6 +196,17 @@ const en: Record<string, string> = {
   'checkin.allGot': 'Claimed {n} campaign(s)',
   'checkin.allNone': 'Nothing to claim',
   'checkin.expiring': 'Credits expiring soon',
+  'checkin.auto': 'Auto check-in',
+  'checkin.autoHint':
+    'When on, the plugin checks once a minute and claims the daily reward as soon as it is available (at most one attempt every 15 minutes). Off by default.',
+  'checkin.autoLast': 'Last: ',
+  'checkin.autoIdle': 'Has not run yet; it will check shortly.',
+  'ui.hint': 'These switches take effect immediately — no DSH restart needed.',
+  'ui.chipSection': 'Composer status chip',
+  'ui.composerChip': 'Show the CodeArts status chip in the composer',
+  'ui.composerChipHint':
+    'When off, the small “● CodeArts” chip beside the composer is hidden. Account and credits stay available on this page.',
+  'ui.saveFail': 'Save failed',
   'models.title': 'Available models',
   'models.hint': '{n} models from the CodeArts gateway.',
   'models.name': 'Name',
@@ -266,6 +289,42 @@ export function apply(ctx: any): void {
   // 只注册 plugins.bundle.config 一处 —— 同时注册 plugins.item 会让同一个
   // 面板在「内置插件配置」里出现两次（列表行 + 展开区），用户看到重复卡片。
   registerCard('plugins.bundle.config')
+
+  // 设置页左侧导航入口。
+  //
+  // `id` 同时驱动两件事：侧栏过滤与图标匹配 ——
+  // `settings.section.icon` 的 id 必须与这里的 id 完全一致，否则不渲染图标。
+  const SETTINGS_SECTION_ID = 'dsh-connect-madao'
+  try {
+    ctx.slots.inject('settings.section', () =>
+      ctx.slots.register(
+        {
+          name: 'settings.section',
+          id: SETTINGS_SECTION_ID,
+          order: 55,
+          label: () => t('meta.title'),
+          locale: namespace,
+          inject: () => ({ t, surface: 'settings' }),
+        },
+        CodeArtsPanel,
+      ),
+    )
+  } catch (err) {
+    console.error('[dsh-connect-madao] settings.section register failed:', err)
+  }
+
+  // 图标槽位是独立的一格，某些宿主版本可能没有；缺了只是退回默认齿轮，
+  // 页面本身照常出现，所以这里的失败不冒泡。
+  try {
+    ctx.slots.inject('settings.section.icon', () =>
+      ctx.slots.register(
+        { name: 'settings.section.icon', id: SETTINGS_SECTION_ID, locale: namespace },
+        SettingsSectionIcon,
+      ),
+    )
+  } catch (err) {
+    console.warn('[dsh-connect-madao] settings nav icon register failed (page unaffected):', err)
+  }
 
   // 输入框右侧状态胶囊
   try {

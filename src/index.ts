@@ -13,7 +13,8 @@
  * 上游上新模型或调价后重启 DSH 会自动同步。
  */
 
-import { startServer, type RunningServer } from './server.ts'
+import { borrowClient, startServer, type RunningServer } from './server.ts'
+import { createAutoCheckinScheduler, emptyAutoCheckinState } from './auto-checkin.ts'
 import { loadCredentials, DEFAULT_CRED_PATH } from './credentials.ts'
 import { StsProvider } from './sts-provider.ts'
 import { MadaoClient } from './client.ts'
@@ -86,6 +87,9 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
     if (typeof ctx?.effect === 'function') {
       ctx.effect(
         () => () => {
+          try {
+            server?.ctx.autoCheckin?.dispose()
+          } catch {}
           void server?.close().catch(() => {})
           server = void 0
           diag('disposed')
@@ -141,6 +145,17 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
 
       server = await startServer({ port, host: '127.0.0.1', gateway: config.gateway, models })
       diag(`bridge ready at ${server.url}/v1 (models=${models.length}, credentials: ${hint})`)
+
+      // 自动签到：默认关闭，由 /settings 的开关控制。挂在这里而不是 startServer
+      // 里，是因为它要复用桥接的 ctx（同一份客户端与 STS 续期）。
+      const scheduler = createAutoCheckinScheduler({
+        state: emptyAutoCheckinState(),
+        getClient: () => borrowClient(server!.ctx),
+      })
+      server.ctx.autoCheckin = scheduler
+      scheduler.start()
+      // 开机补跑一次：命中「今天还没签」就当场领掉，不必等到下个 tick。
+      void scheduler.tick().catch(() => {})
     } catch (err) {
       diag(`bridge failed to start: ${String((err as Error)?.stack ?? err)}`)
     }

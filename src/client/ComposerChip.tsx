@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { bridgeJson, type HealthPayload } from './bridge.ts'
+import { getSettings, loadSettings, subscribeSettings } from './settings.ts'
 
 /**
  * 码道状态胶囊。
@@ -55,6 +56,15 @@ function fmt(n: number | undefined): string {
 }
 
 export function ComposerChip({ t }: ChipProps) {
+  // 「设置 → 界面」里关掉胶囊时，整块直接不渲染（slot 会留空）。
+  // 与面板共用同一个 store，所以在设置页改完，这里立刻跟变化。
+  const [visible, setVisible] = useState(getSettings().composerChip)
+  useEffect(() => {
+    const stop = subscribeSettings((next) => setVisible(next.composerChip))
+    void loadSettings()
+    return stop
+  }, [])
+
   const [health, setHealth] = useState<HealthPayload | null>(null)
   const [account, setAccount] = useState<AccountInfo | null>(null)
   const [open, setOpen] = useState(false)
@@ -129,6 +139,8 @@ export function ComposerChip({ t }: ChipProps) {
   const label = state === 'ready' ? t('chip.ready') : t('chip.idle')
   const credit = account?.credit
 
+  if (!visible) return null
+
   return (
     <div ref={boxRef} style={{ position: 'relative', display: 'inline-flex' }}>
       <button style={S.chip(state)} onClick={() => setOpen((v) => !v)} title={t('meta.title')}>
@@ -195,7 +207,9 @@ export function ComposerChip({ t }: ChipProps) {
             <div style={S.steps}>
               {steps.map((s) => (
                 <div key={s.name} style={S.stepRow}>
-                  <span style={{ color: s.ok ? 'var(--dsh-color-success, #3fb950)' : 'var(--dsh-color-danger, #f85149)' }}>
+                  <span style={{ color: s.ok
+                      ? 'var(--dsw-alias-state-success-primary, #2ea043)'
+                      : 'var(--dsw-alias-state-error-primary, #d1242f)' }}>
                     {s.ok ? '✓' : '✗'}
                   </span>
                   <span style={{ flex: 1 }}>{s.name}</span>
@@ -221,9 +235,9 @@ const S = {
       height: 26,
       padding: '0 9px',
       borderRadius: 13,
-      border: '1px solid var(--dsh-color-border, rgba(255,255,255,.12))',
+      border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
       background: 'transparent',
-      color: 'inherit',
+      color: 'var(--dsw-alias-label-primary, #0f1115)',
       fontSize: 12,
       cursor: 'pointer',
       opacity: state === 'idle' ? 0.6 : 1,
@@ -235,18 +249,18 @@ const S = {
       borderRadius: '50%',
       background:
         state === 'ready'
-          ? 'var(--dsh-color-success, #3fb950)'
+          ? 'var(--dsw-alias-state-success-primary, #2ea043)'
           : state === 'fail'
-            ? 'var(--dsh-color-danger, #f85149)'
-            : 'var(--dsh-color-text-secondary, #8b949e)',
+            ? 'var(--dsw-alias-state-error-primary, #d1242f)'
+            : 'var(--dsw-alias-label-tertiary, #81858c)',
     }) as React.CSSProperties,
   mini: {
     marginLeft: 2,
     paddingLeft: 6,
-    borderLeft: '1px solid var(--dsh-color-border, rgba(255,255,255,.12))',
+    borderLeft: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
     fontFamily: 'monospace',
     fontSize: 11,
-    opacity: 0.75,
+    color: 'var(--dsw-alias-label-secondary, #61666b)',
   } as React.CSSProperties,
   pop: {
     position: 'absolute',
@@ -255,10 +269,10 @@ const S = {
     width: 288,
     padding: 12,
     borderRadius: 10,
-    border: '1px solid var(--dsh-color-border, rgba(255,255,255,.12))',
-    background: 'var(--dsh-color-surface, #161b22)',
+    border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
+    background: 'var(--dsw-alias-bg-layer-3, #ffffff)',
     boxShadow: '0 8px 28px rgba(0,0,0,.45)',
-    color: 'var(--dsh-color-text, #e6edf3)',
+    color: 'var(--dsw-alias-label-primary, #0f1115)',
     fontSize: 12,
     zIndex: 50,
   } as React.CSSProperties,
@@ -268,8 +282,12 @@ const S = {
       fontSize: 10,
       padding: '1px 6px',
       borderRadius: 8,
-      background: ok ? 'rgba(63,185,80,.16)' : 'rgba(248,81,73,.16)',
-      color: ok ? 'var(--dsh-color-success, #3fb950)' : 'var(--dsh-color-danger, #f85149)',
+      background: ok
+        ? 'color-mix(in srgb, var(--dsw-alias-state-success-primary, #2ea043) 16%, transparent)'
+        : 'color-mix(in srgb, var(--dsw-alias-state-error-primary, #d1242f) 16%, transparent)',
+      color: ok
+        ? 'var(--dsw-alias-state-success-primary, #2ea043)'
+        : 'var(--dsw-alias-state-error-primary, #d1242f)',
     }) as React.CSSProperties,
   account: { display: 'flex', alignItems: 'center', gap: 8 } as React.CSSProperties,
   avatar: {
@@ -279,7 +297,7 @@ const S = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'rgba(139,148,158,.22)',
+    background: 'var(--dsw-alias-bg-layer-2, #f4f5f7)',
     fontSize: 12,
     fontWeight: 600,
     flexShrink: 0,
@@ -290,16 +308,16 @@ const S = {
   mono: { fontFamily: 'monospace', fontSize: 11 } as React.CSSProperties,
   big: { fontSize: 22, fontWeight: 600, fontVariantNumeric: 'tabular-nums', marginBottom: 5 } as React.CSSProperties,
   bigUnit: { fontSize: 12, fontWeight: 400, opacity: 0.55 } as React.CSSProperties,
-  sep: { height: 1, background: 'var(--dsh-color-border, rgba(255,255,255,.12))', margin: '10px 0' } as React.CSSProperties,
+  sep: { height: 1, background: 'var(--dsw-alias-border-l2, rgba(0,0,0,.1))', margin: '10px 0' } as React.CSSProperties,
   hint: { fontSize: 11, opacity: 0.6, lineHeight: 1.5 } as React.CSSProperties,
   testBtn: (busy: boolean) =>
     ({
       width: '100%',
       height: 30,
       borderRadius: 7,
-      border: '1px solid var(--dsh-color-border, rgba(255,255,255,.12))',
-      background: 'var(--dsh-color-surface-raised, rgba(255,255,255,.05))',
-      color: 'inherit',
+      border: '1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1))',
+      background: 'var(--dsw-alias-bg-layer-2, #f4f5f7)',
+      color: 'var(--dsw-alias-label-primary, #0f1115)',
       fontSize: 12,
       cursor: busy ? 'default' : 'pointer',
       opacity: busy ? 0.6 : 1,
