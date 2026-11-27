@@ -19,16 +19,27 @@ import { loadCredentials, DEFAULT_CRED_PATH } from './credentials.ts'
 import { StsProvider } from './sts-provider.ts'
 import { MadaoClient } from './client.ts'
 import { discoverModels, FALLBACK_MODELS, type ModelInfo } from './models.ts'
-import { syncPatch } from './host-patch.ts'
-import { appendFileSync, mkdirSync, existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { registerNativeProvider, type NativeProvider } from './native-provider.ts'
+import { removeLegacyProvider, selectModels } from './model-config.ts'
+import { readSettings } from './settings.ts'
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-connect-madao'
-export const inject: string[] = []
+// `llm` 是原生 provider 注册（registerAdapter / registerConfigurableProviders）的前提。
+export const inject: string[] = ['llm']
 
 export const PROVIDER = 'madao'
+
+/**
+ * 原生 provider 的路由 id。
+ *
+ * 与旧的 llm-pi-ai 路由同名：迁移时先删掉 profile 里的 providers.madao，
+ * 再由本插件注册，session 里已经选过的 madao/* 模型不需要改。
+ */
+export const NATIVE_PROVIDER_ID = 'madao'
 
 /** 启动诊断落盘，便于在没有 console 的宿主环境里定位问题。 */
 function diag(line: string): void {
@@ -42,44 +53,76 @@ function diag(line: string): void {
   } catch {}
 }
 
-/**
- * 插件自带的 patch 文件位置。
- *
- * 打包后本文件是 `lib/index.js`，patch 在包根目录，所以上跳一层。
- * 找不到时退回 cwd 下的同名文件。
- */
-function patchPath(): string {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url))
-    const candidate = join(here, '..', 'cordis.patch.yml')
-    if (existsSync(candidate) || existsSync(dirname(candidate))) return candidate
-  } catch {}
-  return join(process.cwd(), 'cordis.patch.yml')
+/** schemastery 的 volatile 标记：改这些字段时只更新值，不重载插件。 */
+function asVolatile<T>(schema: T): T {
+  const candidate = schema as unknown as { volatile?: () => T }
+  return typeof candidate.volatile === 'function' ? candidate.volatile() : schema
 }
 
-export interface MadaoConfig {
-  enabled?: boolean
-  port?: number
-  gateway?: string
-  ak?: string
-  sk?: string
-  /** 是否在启动时把模型清单写回 patch（默认 true） */
-  autoSyncModels?: boolean
+/**
+ * 读一个配置值。
+ *
+ * volatile 字段在 apply 里拿到的是 `{ get(): T }` 活引用，不是普通值；
+ * 直接当字符串用会得到 "[object Object]"（曾经因此把 AK 写成它）。
+ */
+function configValue<T>(value: T): T {
+  const candidate = value as unknown as { get?: () => T }
+  return value !== null && typeof value === 'object' && typeof candidate?.get === 'function'
+    ? candidate.get!()
+    : value
 }
+
+/**
+ * 插件配置 schema。
+ *
+ * 它同时承担一个不太显眼但必要的职责：**让 DSH 的 settings 服务认识
+ * `dsh-connect-madao` 这个命名空间**。模型设置页只渲染“命名空间存在”的
+ * provider（`configured` 依赖 `state.namespaces.has(settingsNs)`），没有
+ * schema 的插件，卡片会被直接过滤掉——哪怕 adapter 和目录项都注册好了。
+ */
+export const Config = z.object({
+  enabled: asVolatile(z.boolean().default(true)),
+  port: asVolatile(z.number().default(8765)),
+  gateway: asVolatile(z.string()),
+  ak: asVolatile(z.string()),
+  sk: asVolatile(z.string()),
+  autoSyncModels: asVolatile(z.boolean().default(true)),
+})
+
+export type MadaoConfig = z.infer<typeof Config>
 
 export function apply(ctx: any, config: MadaoConfig = {}): void {
-  diag(`apply() called; enabled=${config.enabled} port=${config.port ?? 8765}`)
-  if (config.enabled === false) {
+  const enabled = configValue(config.enabled)
+  const port = configValue(config.port) ?? 8765
+  const gateway = configValue(config.gateway)
+  const ak = configValue(config.ak)
+  const sk = configValue(config.sk)
+  const autoSyncModels = configValue(config.autoSyncModels)
+  diag(`apply() called; enabled=${enabled} port=${port}`)
+  // 插件有自己的设置面板（客户端注册的整页），隐藏 settings 服务自动生成的那份。
+  try {
+    ctx.inject(['settings'], (child: any) => {
+      child.effect(() => child.settings.configure({ auto: false }, ctx.fiber))
+    })
+  } catch (err) {
+    diag(`settings.configure skipped: ${String(err)}`)
+  }
+  if (enabled === false) {
     diag('disabled, returning')
     return
   }
 
-  const port = config.port ?? 8765
   let server: RunningServer | undefined
+  let native: NativeProvider | undefined
 
-  if (config.ak && config.sk) {
-    process.env.MADAO_AK = config.ak
-    process.env.MADAO_SK = config.sk
+  // 只接受字符串：schemastery 的 volatile 字段曾经把对象塞进 env，导致
+  // 后续所有请求都拿 "[object Object]" 去换 STS。顺手清掉那次污染。
+  for (const key of ['MADAO_AK', 'MADAO_SK'] as const) {
+    if (process.env[key] === '[object Object]') delete process.env[key]
+  }
+  if (typeof ak === 'string' && typeof sk === 'string' && ak && sk) {
+    process.env.MADAO_AK = ak
+    process.env.MADAO_SK = sk
   }
 
   // 生命周期绑定：不因 effect 用法差异导致整个 apply 抛错
@@ -90,6 +133,10 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
           try {
             server?.ctx.autoCheckin?.dispose()
           } catch {}
+          try {
+            native?.dispose()
+          } catch {}
+          native = void 0
           void server?.close().catch(() => {})
           server = void 0
           diag('disposed')
@@ -106,7 +153,7 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
 
   // 启动时拉一次清单并写回 patch。失败一律降级，绝不阻断桥接服务。
   const syncModels = async (): Promise<ModelInfo[]> => {
-    if (config.autoSyncModels === false) {
+    if (autoSyncModels === false) {
       diag('autoSyncModels disabled, keep patch as-is')
       return FALLBACK_MODELS
     }
@@ -117,13 +164,11 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
         const sts = new StsProvider({ ak: creds.ak, sk: creds.sk })
         creds = await sts.credentials()
       }
-      const client = new MadaoClient({ credentials: creds, gateway: config.gateway })
+      const client = new MadaoClient({ credentials: creds, gateway })
       const found = await discoverModels(client)
-      const target = patchPath()
-      const r = syncPatch(target, found.models)
-      if (r.error) diag(`patch sync error: ${r.error}`)
-      else if (r.changed) diag(`patch updated: ${r.models} models → ${r.path}（重启 DSH 后生效）`)
-      else diag(`patch unchanged (${r.models} models, source=${found.source})`)
+      // 原生 provider 的模型来自内存里的 adapter，不再写 cordis.patch.yml：
+      // 写进去反而会被 llm-pi-ai 当成第二条 madao 路由，造成重复注册。
+      diag(`discovered ${found.models.length} models (source=${found.source})`)
       return found.models
     } catch (err) {
       diag(`model discovery skipped: ${String((err as Error)?.message ?? err)}`)
@@ -143,8 +188,42 @@ export function apply(ctx: any, config: MadaoConfig = {}): void {
         diag(`loadCredentials failed: ${String(err)}`)
       }
 
-      server = await startServer({ port, host: '127.0.0.1', gateway: config.gateway, models })
+      server = await startServer({ port, host: '127.0.0.1', gateway, models, dsh: ctx })
       diag(`bridge ready at ${server.url}/v1 (models=${models.length}, credentials: ${hint})`)
+
+      // 由插件自己注册 provider：卡片不再带「自定义」，模型直接来自网关。
+      // 旧安装里 llm-pi-ai 还占着 `madao`，先迁走再注册；失败只降级，不影响对话。
+      try {
+        const settings = await readSettings()
+        const selected = selectModels(models, settings)
+        try {
+          if (await removeLegacyProvider(ctx)) diag('legacy llm-pi-ai providers.madao removed')
+        } catch (err) {
+          diag(`legacy provider migration failed: ${String((err as Error)?.message ?? err)}`)
+        }
+        // pi-ai 撤路由发生在同一次 Loader 协调里；给它几个 tick，避免撞上瞬时重复。
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            native = await registerNativeProvider(ctx, {
+              providerId: NATIVE_PROVIDER_ID,
+              displayName: '码道 CodeArts',
+              port: server.port,
+              models: selected,
+            })
+            break
+          } catch (err) {
+            const message = String((err as Error)?.message ?? err)
+            if (attempt >= 10 || !/DUPLICATE|already|registered/i.test(message)) throw err
+            diag(`native registration attempt ${attempt} deferred: ${message}`)
+            await new Promise((resolve) => setTimeout(resolve, 200))
+          }
+        }
+        server.ctx.native = native
+        server.ctx.describe = () => (ctx as any).get?.('settings')?.describe?.()
+        diag(`native provider registered: ${NATIVE_PROVIDER_ID} (models=${selected.length})`)
+      } catch (err) {
+        diag(`native provider registration failed: ${String((err as Error)?.stack ?? err)}`)
+      }
 
       // 自动签到：默认关闭，由 /settings 的开关控制。挂在这里而不是 startServer
       // 里，是因为它要复用桥接的 ctx（同一份客户端与 STS 续期）。

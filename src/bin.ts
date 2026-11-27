@@ -107,18 +107,14 @@ async function cmdDoctor(): Promise<void> {
 /**
  * 打印模型清单。
  *
- * 默认打网关实时结果（与 DSH 里看到的完全一致）；
- * 加 `--write` 则顺手把清单写回插件自带的 cordis.patch.yml。
+ * 只打印网关实时结果；模型由插件自己的 adapter 提供给 DSH，
+ * 不再写回 cordis.patch.yml。
  */
 async function cmdModels(): Promise<void> {
-  const write = process.argv.includes('--write')
   const { loadCredentials } = await import('./credentials.ts')
   const { StsProvider } = await import('./sts-provider.ts')
   const { MadaoClient } = await import('./client.ts')
   const { discoverModels } = await import('./models.ts')
-  const { syncPatch } = await import('./host-patch.ts')
-  const { dirname, join } = await import('node:path')
-  const { fileURLToPath } = await import('node:url')
 
   try {
     const loaded = await loadCredentials()
@@ -139,12 +135,6 @@ async function cmdModels(): Promise<void> {
       )
     }
 
-    if (write) {
-      const here = dirname(fileURLToPath(import.meta.url))
-      const target = join(here, '..', 'cordis.patch.yml')
-      const r = syncPatch(target, found.models)
-      console.log(r.error ? `\n写回失败：${r.error}` : `\n${r.changed ? '已写入' : '无变化'} → ${r.path}`)
-    }
   } catch (e) {
     console.error(`读取模型清单失败：${String((e as Error)?.message ?? e)}`)
     process.exitCode = 1

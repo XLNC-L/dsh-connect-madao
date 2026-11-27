@@ -29,7 +29,7 @@ function q(s: string): string {
  * 思考等级的 ✦、以及**图片能力图标**（由 `input` 含 image 触发）。
  * 所以名字里只需要接上倍率，不要拼图标 —— 拼了会和 DSH 画的重复。
  */
-function displayName(m: ModelInfo): string {
+export function displayName(m: ModelInfo): string {
   return m.ratio ? `${m.name} · ${m.ratio}` : m.name
 }
 
@@ -65,28 +65,62 @@ function displayContextWindow(real: number): number {
   return Math.max(real, Math.round(real * CONTEXT_DISPLAY_FACTOR))
 }
 
-function renderModel(m: ModelInfo): string {
-  const lines: string[] = []
-  lines.push(`          - id: ${q(m.id)}`)
-  lines.push(`            name: ${q(displayName(m))}`)
-  lines.push(`            contextWindow: ${displayContextWindow(m.context)}`)
-  lines.push(`            maxTokens: ${m.maxOutput}`)
-  // 声明 image 输入，让 DSH 自己把「支持图片」的标记画在它管理的右侧位置，
-  // 而不是把 👁 拼进 name（那样位置会随名字长度浮动，还容易被截断）。
-  //
-  // 代价：DSH 会允许附图。但桥接的 flattenContent 只转发文本，
-  // 所以 server 侧对带图片的请求会返回明确错误，而不是静默丢弃 ——
-  // 见 assertTextOnly()。
-  lines.push(`            input: [ ${m.supportsImages ? 'text, image' : 'text'} ]`)
+/**
+ * pi-ai provider 里一条模型配置的运行时对象形态。
+ *
+ * 与 YAML patch 里的字段一一对应。设置页保存模型选择时，直接把这份对象
+ * 交给 config-editor 写进 profile，因此它必须和 renderModel 生成的 YAML
+ * 完全同源 —— 两边分别手写字段，迟早会漂移。
+ */
+export interface ProviderModelConfig {
+  id: string
+  name: string
+  contextWindow: number
+  maxTokens: number
+  input: string[]
+  reasoningEfforts: false | Record<string, string | null>
+}
 
+/** 由 ModelInfo 生成 pi-ai provider 需要的模型配置（含展示名、图片、思考档位）。 */
+export function buildProviderModel(m: ModelInfo): ProviderModelConfig {
+  const config: ProviderModelConfig = {
+    id: m.id,
+    name: displayName(m),
+    contextWindow: displayContextWindow(m.context),
+    maxTokens: m.maxOutput,
+    // 声明 image 输入，让 DSH 自己把「支持图片」的标记画在它管理的右侧位置，
+    // 而不是把 👁 拼进 name（那样位置会随名字长度浮动，还容易被截断）。
+    //
+    // 代价：DSH 会允许附图。但桥接的 flattenContent 只转发文本，
+    // 所以 server 侧对带图片的请求会返回明确错误，而不是静默丢弃 ——
+    // 见 assertTextOnly()。
+    input: m.supportsImages ? ['text', 'image'] : ['text'],
+    reasoningEfforts: false,
+  }
   if (m.strengths.length > 0) {
     // 补齐 DSH 会显示的档位，避免「选中未声明档位 → 校验失败」
     const levels = Array.from(new Set(['low', ...m.strengths]))
-    lines.push('            reasoningEfforts:')
-    lines.push('              off: null')
-    for (const lv of levels) lines.push(`              ${lv}: ${q(lv)}`)
-  } else {
+    config.reasoningEfforts = Object.fromEntries([['off', null], ...levels.map((lv) => [lv, lv])])
+  }
+  return config
+}
+
+function renderModel(m: ModelInfo): string {
+  const config = buildProviderModel(m)
+  const lines: string[] = []
+  lines.push(`          - id: ${q(config.id)}`)
+  lines.push(`            name: ${q(config.name)}`)
+  lines.push(`            contextWindow: ${config.contextWindow}`)
+  lines.push(`            maxTokens: ${config.maxTokens}`)
+  lines.push(`            input: [ ${config.input.join(', ')} ]`)
+
+  if (config.reasoningEfforts === false) {
     lines.push('            reasoningEfforts: false')
+  } else {
+    lines.push('            reasoningEfforts:')
+    for (const [level, value] of Object.entries(config.reasoningEfforts)) {
+      lines.push(`              ${level}: ${value === null ? 'null' : q(String(value))}`)
+    }
   }
   return lines.join('\n')
 }

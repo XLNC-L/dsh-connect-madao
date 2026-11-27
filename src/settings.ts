@@ -32,13 +32,39 @@ export interface MadaoSettings {
   composerChip: boolean
   /** 自动签到是否开启。 */
   autoCheckin: boolean
+  /**
+   * 不在 DSH 模型选择器里显示的模型 id。
+   *
+   * 存「排除项」而不是「启用项」：上游新增模型时默认可见，用户不必
+   * 每次上新都回来点一遍。空数组 = 全部显示。
+   */
+  hiddenModels: string[]
+  /**
+   * 每个模型在 DSH 里展示的上下文上限（token）。
+   *
+   * 只能往小里改：网关的真实 context_window 是硬上限，桥接自己也会按它
+   * 拦截请求，所以这里调大没有意义、还会让 DSH 少压缩一次。缺省 = 网关值。
+   */
+  contextCaps: Record<string, number>
 }
 
-export const DEFAULT_SETTINGS: Readonly<MadaoSettings> = Object.freeze({
-  schemaVersion: 1,
-  composerChip: true,
-  autoCheckin: false,
-})
+function defaults(): MadaoSettings {
+  return { schemaVersion: 1, composerChip: true, autoCheckin: false, hiddenModels: [], contextCaps: {} }
+}
+
+export const DEFAULT_SETTINGS: Readonly<MadaoSettings> = Object.freeze(defaults())
+
+/** 归一化上下文上限表：只保留正整数，键必须是非空字符串。 */
+function normalizeCaps(raw: unknown): Record<string, number> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
+  const out: Record<string, number> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key.length === 0) continue
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) continue
+    out[key] = Math.round(value)
+  }
+  return out
+}
 
 /**
  * 设置文件路径。
@@ -58,14 +84,25 @@ export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
  * `autoCheckin` 也清掉。
  */
 export function normalizeSettings(raw: unknown): MadaoSettings {
-  if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_SETTINGS }
+  if (typeof raw !== 'object' || raw === null) return defaults()
   const record = raw as Record<string, unknown>
+  const hiddenModels = Array.isArray(record.hiddenModels)
+    ? Array.from(
+        new Set(
+          record.hiddenModels.filter(
+            (value): value is string => typeof value === 'string' && value.length > 0,
+          ),
+        ),
+      )
+    : []
   return {
     schemaVersion: 1,
     composerChip:
       typeof record.composerChip === 'boolean' ? record.composerChip : DEFAULT_SETTINGS.composerChip,
     autoCheckin:
       typeof record.autoCheckin === 'boolean' ? record.autoCheckin : DEFAULT_SETTINGS.autoCheckin,
+    hiddenModels,
+    contextCaps: normalizeCaps(record.contextCaps),
   }
 }
 
@@ -77,12 +114,12 @@ export async function readSettings(env: NodeJS.ProcessEnv = process.env): Promis
   try {
     text = await readFile(settingsPath(env), 'utf8')
   } catch {
-    return { ...DEFAULT_SETTINGS }
+    return defaults()
   }
   try {
     return normalizeSettings(JSON.parse(text))
   } catch {
-    return { ...DEFAULT_SETTINGS }
+    return defaults()
   }
 }
 
@@ -107,12 +144,15 @@ export async function writeSettings(
  * 回传给服务端，也就不会出现「前端传了旧值把另一项覆盖掉」。
  */
 export async function patchSettings(
-  patch: Partial<Pick<MadaoSettings, 'composerChip' | 'autoCheckin'>>,
+  patch: Partial<Pick<MadaoSettings, 'composerChip' | 'autoCheckin' | 'hiddenModels' | 'contextCaps'>>,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<MadaoSettings> {
   const current = await readSettings(env)
   const next = normalizeSettings({ ...current, ...patch })
   await writeSettings(next, env)
-  chatLog(`settings updated: composerChip=${next.composerChip} autoCheckin=${next.autoCheckin}`)
+  chatLog(
+    `settings updated: composerChip=${next.composerChip} autoCheckin=${next.autoCheckin} ` +
+      `hiddenModels=${next.hiddenModels.length} contextCaps=${Object.keys(next.contextCaps).length}`,
+  )
   return next
 }

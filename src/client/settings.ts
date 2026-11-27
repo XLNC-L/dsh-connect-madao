@@ -25,7 +25,14 @@ const AUTO_CACHE_KEY = 'dsh-connect-madao:autoCheckin'
 export interface SettingsPayload {
   composerChip: boolean
   autoCheckin: boolean
+  /** 不在 DSH 模型选择器里显示的模型 id。 */
+  hiddenModels: string[]
+  /** 每个模型在 DSH 里展示的上下文上限；缺省用网关值。 */
+  contextCaps: Record<string, number>
 }
+
+/** 宿主是否把模型选择真正应用到了 llm-pi-ai 配置。 */
+export type ModelApplyMode = 'live' | 'unavailable' | 'failed' | null
 
 /** 宿主返回的自动签到运行状态（与 src/auto-checkin.ts 的 AutoCheckinState 对应）。 */
 export interface AutoCheckinState {
@@ -43,6 +50,8 @@ interface SettingsResponse {
   ok?: boolean
   settings?: Partial<SettingsPayload>
   autoCheckin?: AutoCheckinState | null
+  modelApply?: ModelApplyMode
+  modelApplyError?: string
 }
 
 function readCachedBool(key: string): boolean | null {
@@ -63,6 +72,8 @@ function writeCachedBool(key: string, value: boolean): void {
 let current: SettingsPayload = {
   composerChip: readCachedBool(CHIP_CACHE_KEY) ?? true,
   autoCheckin: readCachedBool(AUTO_CACHE_KEY) ?? false,
+  hiddenModels: [],
+  contextCaps: {},
 }
 
 /** 最近一次拿到的自动签到运行状态（可能为 null：还没问过宿主）。 */
@@ -109,6 +120,18 @@ function applyPayload(payload: SettingsResponse | null | undefined): void {
   if (settings) {
     if (typeof settings.composerChip === 'boolean') next.composerChip = settings.composerChip
     if (typeof settings.autoCheckin === 'boolean') next.autoCheckin = settings.autoCheckin
+    if (Array.isArray(settings.hiddenModels)) {
+      next.hiddenModels = settings.hiddenModels.filter(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      )
+    }
+    if (typeof settings.contextCaps === 'object' && settings.contextCaps !== null) {
+      const caps: Record<string, number> = {}
+      for (const [key, value] of Object.entries(settings.contextCaps)) {
+        if (typeof value === 'number' && Number.isFinite(value) && value > 0) caps[key] = value
+      }
+      next.contextCaps = caps
+    }
   }
   if (payload.autoCheckin && typeof payload.autoCheckin === 'object') {
     autoState = payload.autoCheckin
@@ -129,7 +152,18 @@ export async function loadSettings(): Promise<SettingsPayload> {
  *
  * 宿主回包里带着最新的运行状态，所以调用方不需要再单独问一次。
  */
-export async function saveSettings(patch: Partial<SettingsPayload>): Promise<SettingsPayload> {
-  applyPayload(await bridgePost<SettingsResponse>('/settings', patch, 15_000))
-  return current
+export async function saveSettings(patch: Partial<SettingsPayload>): Promise<SettingsSaveResult> {
+  const response = await bridgePost<SettingsResponse>('/settings', patch, 30_000)
+  applyPayload(response)
+  return {
+    settings: current,
+    modelApply: response.modelApply ?? null,
+    modelApplyError: response.modelApplyError,
+  }
+}
+
+export interface SettingsSaveResult {
+  settings: SettingsPayload
+  modelApply: ModelApplyMode
+  modelApplyError?: string
 }

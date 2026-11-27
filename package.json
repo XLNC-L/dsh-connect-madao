@@ -2,7 +2,7 @@
   "name": "dsh-connect-madao",
   "displayName": "DSH Connect 码道",
   "description": "把华为云码道（CodeArts Agent）的模型接入 DeepSeek Harness：自签 SDK-HMAC-SHA256、P-256 密钥协商与 SM4-GCM 载荷加密，对外提供 OpenAI 兼容接口，并带设置面板与状态胶囊。",
-  "version": "0.10.0",
+  "version": "0.12.0",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -50,13 +50,15 @@
     }
   },
   "scripts": {
+    "build": "node build-host.mjs && node build-client.mjs",
     "serve": "node --experimental-strip-types src/bin.ts serve",
     "doctor": "node --experimental-strip-types src/bin.ts doctor",
     "models": "node --experimental-strip-types src/bin.ts models",
     "e2e": "node --experimental-strip-types e2e.ts",
-    "test": "node --test --experimental-strip-types tests/*.spec.ts",
-    "sync-patch": "node --experimental-strip-types sync-patch.ts",
-    "prepack": "node --experimental-strip-types sync-patch.ts || echo \"[warn] patch 同步失败，沿用现有文件\""
+    "test": "node --test --experimental-strip-types tests/*.spec.ts"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   },
   "peerDependencies": {
     "react": "^18.2.0"
