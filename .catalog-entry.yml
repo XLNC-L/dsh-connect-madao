@@ -1,5 +1,5 @@
-url: https://github.com/XLNC-L/dsh-connect-madao
-name: XLNC-L/dsh-connect-madao
+url: https://github.com/KaenFelix/dsh-connect-madao
+name: KaenFelix/dsh-connect-madao
 category: model
 description:
   en: Brings Huawei Cloud CodeArts Agent (码道) models into DeepSeek Harness. Eleven models including GLM-5.2, GLM-5.3, DeepSeek-V4.1 and Kimi-K3, with image input, tool calls, thinking levels and a daily check-in button. Speaks the gateway's signed and SM4-GCM encrypted protocol directly, and does not require the CodeArts desktop client to run.

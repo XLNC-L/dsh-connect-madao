@@ -1,5 +1,5 @@
 {
-  "name": "dsh-connect-madao",
+  "name": "@kaenfelix/dsh-connect-madao",
   "displayName": "DSH Connect 码道",
   "description": "把华为云码道（CodeArts Agent）的模型接入 DeepSeek Harness：自签 SDK-HMAC-SHA256、P-256 密钥协商与 SM4-GCM 载荷加密，对外提供 OpenAI 兼容接口，并带设置面板与状态胶囊。",
   "version": "0.12.0",
@@ -58,6 +58,7 @@
     "test": "node --test --experimental-strip-types tests/*.spec.ts"
   },
   "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.19.0",
     "esbuild": "^0.28.2"
   },
   "peerDependencies": {
@@ -73,11 +74,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/XLNC-L/dsh-connect-madao.git"
+    "url": "git+https://github.com/KaenFelix/dsh-connect-madao.git"
   },
-  "homepage": "https://github.com/XLNC-L/dsh-connect-madao#readme",
+  "homepage": "https://github.com/KaenFelix/dsh-connect-madao#readme",
   "bugs": {
-    "url": "https://github.com/XLNC-L/dsh-connect-madao/issues"
+    "url": "https://github.com/KaenFelix/dsh-connect-madao/issues"
   },
   "author": "XLNC-L",
   "publishConfig": {

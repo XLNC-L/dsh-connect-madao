@@ -16,12 +16,12 @@ DSH 里打开 **插件市场**（`dshmarket`）→ 搜 `码道` 或 `madao` → 
 **方式 B · npm**
 
 ```powershell
-pnpm --dir "%USERPROFILE%\.dsh\profiles\desktop" add dsh-connect-madao
+pnpm --dir "%USERPROFILE%\.dsh\profiles\desktop" add @kaenfelix/dsh-connect-madao
 ```
 
 **方式 C · 离线包**
 
-从 [Releases](https://github.com/XLNC-L/dsh-connect-madao/releases) 下载 `dsh-connect-madao-x.y.z.tgz`，然后：
+从 [Releases](https://github.com/KaenFelix/dsh-connect-madao/releases) 下载 `dsh-connect-madao-x.y.z.tgz`，然后：
 
 ```powershell
 pnpm --dir "%USERPROFILE%\.dsh\profiles\desktop" add "D:\下载\dsh-connect-madao-0.6.1.tgz"
@@ -93,13 +93,13 @@ AK/SK → IAM 换 STS → SDK-HMAC-SHA256 签名 → P-256 协商 → SM4-GCM �
 ### 方式一：npm 包（如果已发布）
 
 ```
-dsh-connect-madao
+@kaenfelix/dsh-connect-madao
 ```
 
 ### 方式二：GitHub 仓库
 
 ```
-github:你的ID/dsh-connect-madao
+github:KaenFelix/dsh-connect-madao
 ```
 
 ### 方式三：本地或下载的 tgz
@@ -253,7 +253,7 @@ DSH 里能给 GLM-5.2 选思考等级，但**码道网关的 chat 接口不接�
 
 **装完模型没出现？**
 看 `%USERPROFILE%\.dsh-connect-madao\host.log`，最后一行的 `models=` 是几。
-如果日志是空的，检查 profile 的 `dsh.profile.bundles` 里有没有 `dsh-connect-madao`。
+如果日志是空的，检查 profile 的 `dsh.profile.bundles` 里有没有 `@kaenfelix/dsh-connect-madao`。
 
 **状态胶囊显示「码道·未配置」？**
 AK/SK 没读到。检查设置页是否保存成功，或 `credentials.json` 是否存在。
@@ -274,7 +274,7 @@ IAM 换 STS 太频繁被限流。等约 1 分钟。插件已做缓存和提前�
 
 ## 卸载
 
-插件列表里关掉开关，或从 profile 的 `dependencies` 移除 `dsh-connect-madao`。
+插件列表里关掉开关，或从 profile 的 `dependencies` 移除 `@kaenfelix/dsh-connect-madao`。
 
 凭证文件 `%USERPROFILE%\.dsh-connect-madao\` 可以一并删掉。
 

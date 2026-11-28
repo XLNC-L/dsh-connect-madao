@@ -27,8 +27,6 @@ for (const { entry, outfile } of TARGETS) {
     format: 'esm',
     platform: 'node',
     target: 'node22',
-    // 宿主自带这个包；插件在运行时由 DSH 的加载器解析，避免打进第二份 schema 实现。
-    external: ['@deepseek-ai/schemastery'],
     // 保留 src/bin.ts 自带的 shebang，esbuild 会把它放在输出首行。
     logLevel: 'warning',
   })

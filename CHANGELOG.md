@@ -30,6 +30,9 @@
 
 ### 升级注意
 
+- **npm 包名改为 `@kaenfelix/dsh-connect-madao`。** 旧的 `dsh-connect-madao`
+  停在 0.9.2；装新包时先卸旧包即可，profile 里的插件 id 与 settings 命名空间
+  仍是 `dsh-connect-madao`，模型选择和状态文件不受影响。
 - 从 0.11.x 升级不需要手动改 YAML；首次启动会自动完成迁移。
 - 选择器里原来选中的 `madao/*` 模型 id 不变，session 不受影响。
 
