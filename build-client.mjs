@@ -74,8 +74,12 @@ body = body.replace(
       .join('\n'),
 )
 
+// 客户端 bundle 的 id 必须等于 npm 包名：DSH 的客户端加载器用包名来
+// 定位并应用这个模块。包名从 package.json 读，升级 scope 时不用改这里。
+const pkgName = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).name
+
 const wrapped = `window.__ModuleLoader__.load({
-\tid: "dsh-connect-madao",
+\tid: ${JSON.stringify(pkgName)},
 \tfactory: (require) => {
 \t\tvar module = { exports: {} };
 \t\tvar exports = module.exports;

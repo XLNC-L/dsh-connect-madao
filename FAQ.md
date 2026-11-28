@@ -182,7 +182,7 @@ failed to decode image: invalid or unsupported image format
 所以：**要明显改变思考深度，用三档模型并选 `low` 或 `max`**；GLM-5.2 那两个只适合微调。
 
 档位列表由网关动态下发（`POST /v1/model/thinking-variants`），码道更新后可能增加 ——
-插件每次启动重新拉取，`cordis.patch.yml` 会随之刷新。
+插件每次启动重新拉取，adapter 的模型目录会随之重建。
 
 ---
 
@@ -210,7 +210,7 @@ failed to decode image: invalid or unsupported image format
 或者命令行：
 
 ```powershell
-pnpm --dir "%USERPROFILE%\.dsh\profiles\desktop" remove dsh-connect-madao
+pnpm --dir "%USERPROFILE%\.dsh\profiles\desktop" remove @yzdys/dsh-connect-madao
 ```
 
 **② 删掉插件的数据（可选）**
@@ -317,7 +317,7 @@ DSH 看 tokens   →  1M 窗口的模型，压缩阈值 838K
 
 ## 还是解决不了？
 
-去 [GitHub Issues](https://github.com/XLNC-L/dsh-connect-madao/issues) 提，**请附上**：
+去 [GitHub Issues](https://github.com/KaenFelix/dsh-connect-madao/issues) 提，**请附上**：
 
 1. `chat.log` 的最后 10 行
 2. 诊断页四步的结果（哪步红）

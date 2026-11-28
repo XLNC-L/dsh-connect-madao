@@ -24,6 +24,9 @@ import { parseStsIdentity } from './identity.ts'
 import { evaluateExpiry } from './credit-expiry.ts'
 import { claimAllCheckins, claimCheckin, queryCheckin, type CheckinState } from './checkin.ts'
 import { chatLog, logDir } from './protocol/log.ts'
+import { normalizeSettings, patchSettings, readSettings, type MadaoSettings } from './settings.ts'
+import { applyModelSelection, selectModels } from './model-config.ts'
+import type { AutoCheckinScheduler } from './auto-checkin.ts'
 
 export { chatLog }
 
@@ -34,6 +37,13 @@ export interface ServerOptions {
   credentialPath?: string
   /** 启动时已发现的模型清单；不传则用兜底清单 */
   models?: ModelInfo[]
+  /**
+   * 宿主插件 ctx（apply 的入参）。
+   *
+   * 只用于拿 configEditor 服务：模型选择要写进 llm-pi-ai 的配置并立刻生效，
+   * 走宿主自己的配置编辑器才不会和 HMR / profile 的其它写入打架。
+   */
+  dsh?: unknown
 }
 
 export interface RunningServer {
@@ -41,11 +51,18 @@ export interface RunningServer {
   port: number
   url: string
   close(): Promise<void>
+  /**
+   * 桥接内部的 ctx。
+   *
+   * 自动签到的调度器要复用同一份已登录客户端（含 STS 续期），否则两条链路
+   * 会各自换 STS，撞上 IAM 的频率限制。
+   */
+  ctx: Ctx
 }
 
 /** 码道可用模型（实测自 /v1/model/builtin）。 */
 
-interface Ctx {
+export interface Ctx {
   client: MadaoClient | null
   sts: StsProvider | null
   loaded: LoadResult | null
@@ -54,6 +71,19 @@ interface Ctx {
   models: ModelInfo[]
   /** 上次用于构造 client 的凭证引用，用于判断是否需要重建 */
   lastCreds?: unknown
+  /** 自动签到调度器（由 index.ts 在桥接起来后挂上并启动） */
+  autoCheckin?: AutoCheckinScheduler
+  /** 宿主插件 ctx，见 ServerOptions.dsh */
+  dsh?: unknown
+  /** 桥接端口，重新生成 provider 配置时要拼 baseURL */
+  port: number
+  /**
+   * 本插件自己注册的 provider 路由。存在时，模型勾选/上下文上限直接重建
+   * adapter 的模型目录并通知 DSH，不再依赖 llm-pi-ai 的配置。
+   */
+  native?: { update(models: ModelInfo[]): void }
+  /** 诊断用：宿主 settings.describe() 的命名空间列表。 */
+  describe?: () => unknown
 }
 
 /**
@@ -82,11 +112,30 @@ async function ensureFreshClient(ctx: Ctx): Promise<void> {
   }
 }
 
+/**
+ * 给自动签到调度器取「当前可用的客户端」。
+ *
+ * 先续一次 STS（`ensureFreshClient`），再返回；凭据没就绪时返回 null 而不是
+ * 抛错 —— 那不是故障，只是桥接还在初始化。
+ */
+export async function borrowClient(ctx: Ctx): Promise<MadaoClient | null> {
+  await ensureFreshClient(ctx)
+  return ctx.client
+}
+
 export async function startServer(opts: ServerOptions = {}): Promise<RunningServer> {
   const port = opts.port ?? 8765
   const host = opts.host ?? '127.0.0.1'
 
-  const ctx: Ctx = { client: null, sts: null, loaded: null, loadError: null, models: opts.models ?? FALLBACK_MODELS }
+  const ctx: Ctx = {
+    client: null,
+    sts: null,
+    loaded: null,
+    loadError: null,
+    models: opts.models ?? FALLBACK_MODELS,
+    dsh: opts.dsh,
+    port,
+  }
 
   try {
     // 按优先级列出所有候选来源，逐个验证，用第一个**真能连上**的。
@@ -167,6 +216,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
     port: actualPort,
     url: `http://${host}:${actualPort}`,
     close: () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
+    ctx,
   }
 }
 
@@ -189,9 +239,119 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Prom
     return json(res, 200, await healthz(ctx))
   }
 
+  // 界面设置：输入框胶囊显隐、自动签到开关。
+  //
+  // 走桥接而不是 DSH 的插件 config，是因为这两个开关要求「点一下立刻生效」——
+  // 写 config 会触发插件重载，把桥接服务和在途对话一起掀掉。
+  //
+  // GET 顺带返回自动签到的运行状态（上次跑了没、领到多少），面板据此显示
+  // 「上次：已自动签到，+100 积分」。
+  if (url.pathname === '/settings' && (req.method === 'GET' || req.method === 'POST')) {
+    if (req.method === 'GET') {
+      const settings = await readSettings()
+      return json(res, 200, {
+        ok: true,
+        settings,
+        autoCheckin: ctx.autoCheckin ? ctx.autoCheckin.state() : null,
+      })
+    }
+    let payload: any = {}
+    try {
+      payload = JSON.parse(await readBody(req))
+    } catch {
+      return json(res, 400, { error: { message: '请求体不是合法 JSON' } })
+    }
+    const patch: Partial<MadaoSettings> = {}
+    if (typeof payload.composerChip === 'boolean') patch.composerChip = payload.composerChip
+    if (typeof payload.autoCheckin === 'boolean') patch.autoCheckin = payload.autoCheckin
+    if (Array.isArray(payload.hiddenModels)) {
+      patch.hiddenModels = payload.hiddenModels.filter(
+        (value: unknown): value is string => typeof value === 'string' && value.length > 0,
+      )
+    }
+    if (typeof payload.contextCaps === 'object' && payload.contextCaps !== null && !Array.isArray(payload.contextCaps)) {
+      patch.contextCaps = payload.contextCaps
+    }
+    if (Object.keys(patch).length === 0) {
+      return json(res, 400, { error: { message: '没有可更新的字段' } })
+    }
+    // 模型全被隐藏时 llm-pi-ai 会因为没有模型可用而加载失败，必须在写盘前拦住。
+    const wantsModelChange = patch.hiddenModels !== undefined || patch.contextCaps !== undefined
+    if (wantsModelChange) {
+      const candidate = normalizeSettings({ ...(await readSettings()), ...patch })
+      if (selectModels(ctx.models, candidate).length === 0) {
+        return json(res, 400, { error: { message: '至少要保留一个模型，否则模型选择器会整个空掉。' } })
+      }
+    }
+    try {
+      const settings = await patchSettings(patch)
+      // 等这一轮跑完再回包：否则前端拿到的是上一轮的状态，刚打开会显示「已关闭」。
+      if (ctx.autoCheckin && patch.autoCheckin !== undefined) {
+        try {
+          await ctx.autoCheckin.tick()
+        } catch {}
+      }
+      // 模型选择不能只落盘。两条路并存：
+      //   - ctx.native：本插件拥有的 provider，直接重建模型目录并通知 DSH；
+      //   - 否则退回 llm-pi-ai 配置（旧路径，兼容升级前的安装）。
+      let outcome: { mode: string; error?: string } | null = null
+      if (wantsModelChange) {
+        const selected = selectModels(ctx.models, settings)
+        if (ctx.native) {
+          try {
+            ctx.native.update(selected)
+            outcome = { mode: 'live' }
+          } catch (e) {
+            outcome = { mode: 'failed', error: String((e as Error)?.message ?? e) }
+          }
+        } else {
+          // 没注册原生 provider 的宿主机才退回 llm-pi-ai 配置路径。
+          outcome = await applyModelSelection(ctx.dsh, ctx.models, settings, ctx.port)
+        }
+      }
+      return json(res, 200, {
+        ok: true,
+        settings,
+        autoCheckin: ctx.autoCheckin ? ctx.autoCheckin.state() : null,
+        modelApply: outcome?.mode ?? null,
+        modelApplyError: outcome?.error,
+      })
+    } catch (e) {
+      return json(res, 500, { error: { message: `保存设置失败：${String((e as Error)?.message ?? e)}` } })
+    }
+  }
+
   // 浮层用：账号 + 额度（额度每次现查）
   if (req.method === 'GET' && (url.pathname === '/diag/account' || url.pathname === '/diag/credit')) {
     return json(res, 200, await accountInfo(ctx))
+  }
+
+  // 原生 provider 诊断：直接问 adapter 当前提供哪些模型。
+  if (req.method === 'GET' && url.pathname === '/diag/native') {
+    const native = ctx.native as any
+    if (!native) return json(res, 200, { ok: false, reason: 'native provider not registered' })
+    try {
+      const models = await native.listModels()
+      const llm = (ctx.dsh as any)?.get?.('llm')
+      return json(res, 200, {
+        ok: true,
+        provider: native.providerId,
+        count: models.length,
+        models,
+        providers: llm?.listProviders?.(),
+        directory: llm?.listConfigurableProviders?.(),
+        namespaces: (() => {
+          try {
+            const rows = ctx.describe?.() as any
+            return Array.isArray(rows) ? rows.map((row) => row?.ns) : rows
+          } catch (e) {
+            return String((e as Error)?.message ?? e)
+          }
+        })(),
+      })
+    } catch (e) {
+      return json(res, 200, { ok: false, reason: String((e as Error)?.message ?? e) })
+    }
   }
 
   // 「测试」按钮：STS → 协商 → 模型 → 额度 全链路自检。

@@ -1,4 +1,4 @@
-# dsh-connect-madao
+# @yzdys/dsh-connect-madao
 
 把华为云码道（CodeArts Agent）的模型接入 DeepSeek Harness。
 
@@ -16,7 +16,8 @@
 | OpenAI 兼容 HTTP 服务 | ✅ 流式 + 非流式均验证 |
 | 福利活动（签到 / 确认 / 到期预警） | ✅ 单测 38 项通过 |
 | 前端设置面板 | ✅ 构建通过（50.4KB bundle） |
-| 输入框状态胶囊 | ✅ 构建通过 |
+| 输入框状态胶囊 | ✅ 构建通过（可在「界面」页关掉） |
+| 自动签到（可选） | ✅ 默认关闭，面板里一键开 |
 
 **已实测打通**：`doctor` 四步全绿，HTTP 流式返回 `reasoning_content` + `content` + `[DONE]`，非流式返回完整 JSON。
 
@@ -73,8 +74,7 @@ STS 由插件调 IAM 自动换取并按期续租；模型清单在每次启动�
 
 1. 起本地桥接服务 `http://127.0.0.1:8765/v1`
 2. 从网关拉当前模型清单（含倍率、是否多模态、可选思考强度）
-3. 按拉到的结果重写插件自带的 `cordis.patch.yml`
-4. 把 `madao` provider 注册进 DSH
+3. 用一个自带的 LLM adapter 把 `madao` provider 注册进 DSH
 
 **不需要手写任何 YAML**，上游上新模型或调价，重启即同步。
 
@@ -88,7 +88,6 @@ STS 由插件调 IAM 自动换取并按期续租；模型清单在每次启动�
 ```bash
 node lib/bin.js doctor        # 四步自检
 node lib/bin.js models        # 打印网关当前模型清单
-node lib/bin.js models --write # 顺手把清单写回 patch
 ```
 
 ### 4. 手动接入（不走插件）
@@ -128,11 +127,15 @@ src/
   client.ts       协商缓存 + 签名 + 加密请求 + SSE 解密流
   credentials.ts  凭证加载（env / file）
   server.ts       OpenAI 兼容 HTTP 服务
+  settings.ts     界面设置读写（$DSH_HOME/dsh-connect-madao-state.json）
+  auto-checkin.ts 自动签到调度器（可选，默认关闭）
   bin.ts          CLI：serve / doctor / models
   client/
     index.ts      客户端插件入口（apply/inject/name）
-    Panel.tsx     设置面板（账号/模型/诊断/关于）
+    Panel.tsx     设置面板（账号/界面/模型/诊断/关于）
     ComposerChip.tsx 输入框状态胶囊
+    SectionIcon.tsx  设置页侧栏图标
+    settings.ts   前端设置 store（面板与胶囊共用）
 lib/              构建产物
   index.js        宿主侧
   client.js       前端 bundle
@@ -160,6 +163,78 @@ lib/              构建产物
 
 ---
 
+## 面板与设置
+
+面板同时出现在两处：**设置页左侧导航的「码道连接器」**，以及插件详情页的卡片。
+两处是同一个组件，改动立刻互相同步。
+
+### 界面
+
+| 开关 | 默认 | 作用 |
+|---|---|---|
+| 显示输入框「码道」状态胶囊 | 开 | 关掉后输入框右侧那个「● 码道」不再出现。账号与积分仍可在面板里看 |
+
+### 模型（0.11.0 起）
+
+「模型」页列出网关当前提供的全部模型，每一行一个勾选框：
+
+- 取消勾选 → 该模型从 DSH 的模型选择器里消失；勾回来 → 立刻重新出现
+- **全选 / 全不选** 一次改完（至少要留一个，否则选择器会空掉，保存会被拦下）
+- 搜索框按显示名或 `model_id` 过滤，模型多了也能快速找到
+- 每行右侧的下拉框可以**调小该模型在 DSH 里的上下文上限**（如 `1M → 256K`）。
+  往小调会让 DSH 更早压缩历史；网关的真实上限不变，调大没有意义，所以不提供
+- 改完点底部的 **保存**：勾选与上限一起落盘，插件随即重建 adapter 的模型目录
+  并通知 DSH，**立即生效**，不需要重启 DSH
+
+> 上下文上限只影响 DSH 侧的展示与压缩时机；真正卡住超长请求的仍是网关的
+> `context_window` 和桥接自己的检查。
+
+上游新增模型时，面板会从 `/v1/models` 自动看到它（默认勾选），重启 DSH 后
+adapter 就会带上它，不需要额外保存。
+
+#### 「设置 → 模型」里的码道卡片
+
+0.12.0 起，码道不再复用 `llm-pi-ai` 的 `providers` 配置，而是像 trae / WorkBuddy
+那样自带一个 LLM adapter：
+
+- 插件自己注册 `madao` provider（`declared: false`），DSH 不再把它当成「自定义」
+- 卡片展开后只显示名称、路由 id 和一句「其余字段在 cordis.patch.yml 中」——
+  provider 的模型由插件在运行时提供，不需要在设置页里编辑
+- 模型清单与勾选仍然在插件自己的面板里管，保存后 adapter 立即重建
+
+### 自动签到
+
+「账号」页的「每日签到」区下面有一个**自动签到**开关，默认关闭。
+
+打开后的行为：
+
+- 宿主每 **1 分钟**检查一次，发现当天可领就自动调 `POST /v1/ops/claim`
+- 两次**真实请求之间至少间隔 15 分钟**（节流），不会反复打上游
+- 开关从关变开时**立刻**跑一轮，不用等下一个 tick
+- 复用桥接服务那份已登录客户端（含 STS 续期），不另起一套
+- 面板会显示上次结果：「已自动签到，+100 积分」／「今日已领取」／「自动签到已关闭」
+
+为什么默认关闭：签到是**会改变账号状态**的动作，不该由插件替用户决定。作者在
+CHANGELOG 里讨论过这个功能，当时的结论也是「默认关闭 + 显式开关」。
+
+> 注：签到积分只有 1 天有效期。自动签到每天帮你领，但当天没用掉就会过期 ——
+> 这不会造成损失，只是不会累积。
+
+### 这些设置存在哪里
+
+界面开关、自动签到状态、模型勾选与上下文上限都存在
+`$DSH_HOME/dsh-connect-madao-state.json`（`DSH_HOME` 未设时为 `~/.dsh`），
+权限 `0o600`，写盘走「临时文件 + rename」。
+
+界面开关和签到**刻意不走 DSH 的插件 config**：它们要求「点一下立刻生效」，而写
+插件 config 意味着「改配置 → 重载插件」，会把桥接服务和在途对话一起掀掉。
+
+模型选择也不走 DSH 的插件 config：保存时插件直接重建内存里的 adapter 模型目录，
+再通知 DSH 刷新，所以同样不用重启。旧安装里 `llm-pi-ai` 的 `providers.madao`
+会在启动时自动迁走（只删这一段，`ark-coding-plan` 等其它 provider 原样保留）。
+
+---
+
 ## 已知限制
 
 - **思考强度已生效**（0.5.1 起）：网关认的是 **`reasoning_effort`**，不是 `strength`。
@@ -171,7 +246,7 @@ lib/              构建产物
   - `GLM-5.3` / `GLM-5.3-Flash` / `DeepSeek-V4.1-Flash`(含 1017) / `Kimi-K3`(含 3.1-Pro)：
     `low` / `high` / `max`（梯度明显：295 → 330 → 684 字）
 
-  插件每次启动重新拉取档位列表，`cordis.patch.yml` 随之刷新。
+  插件每次启动重新拉取档位列表，adapter 的模型目录随之重建。
 - **工具调用（tool_calls）已支持**（0.4.1 起）：早期版本只转发 `content` 和
   `reasoning_content`，把 `tool_calls` 帧整个丢掉了。表现是 `finish_reason: "tool_calls"`
   但 `content` 为空，客户端只看到「有思考、没内容」，于是判定异常并中断 ——

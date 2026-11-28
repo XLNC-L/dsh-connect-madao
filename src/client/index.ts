@@ -18,6 +18,7 @@
 
 import { CodeArtsPanel } from './Panel.tsx'
 import { ComposerChip } from './ComposerChip.tsx'
+import { SettingsSectionIcon } from './SectionIcon.tsx'
 
 export const name = 'dsh-connect-madao-client'
 export const inject = ['slots', 'locale']
@@ -27,6 +28,7 @@ const zh = {
   'meta.title': '码道连接器',
   'meta.desc': '把华为云码道（CodeArts Agent）模型接入 DSH',
   'tab.account': '账号',
+  'tab.interface': '界面',
   'tab.models': '模型',
   'tab.diagnostics': '诊断',
   'tab.about': '关于',
@@ -82,6 +84,15 @@ const zh = {
   'checkin.allGot': '已领取 {n} 项活动',
   'checkin.allNone': '没有可领的活动',
   'checkin.expiring': '积分即将到期',
+  'checkin.auto': '自动签到',
+  'checkin.autoHint': '开启后，插件每分钟检查一次，发现当天可领就自动领取（每 15 分钟最多尝试一次）。默认关闭。',
+  'checkin.autoLast': '上次：',
+  'checkin.autoIdle': '还没有运行过，稍后自动检查。',
+  'ui.hint': '这里的开关点一下就生效，不需要重启 DSH。',
+  'ui.chipSection': '输入框状态胶囊',
+  'ui.composerChip': '显示输入框「码道」状态胶囊',
+  'ui.composerChipHint': '关掉后，输入框右侧那个「● 码道」小胶囊不再出现；账号与积分仍可在本页查看。',
+  'ui.saveFail': '保存失败',
   'models.title': '可用模型',
   'models.hint': '以下模型取自码道网关，共 {n} 个。',
   'models.name': '名称',
@@ -91,6 +102,24 @@ const zh = {
   'models.ratioHint': '相对基准价格的消耗倍率，越低越省',
   'models.think': '思考',
   'models.thinkHint': '该模型在码道侧可选的思考强度。注意：网关的 chat 接口不透传强度参数（实测各种字段名与 model 变体均被忽略），因此这里的档位目前只影响 DSH 侧展示，不会改变上游行为。',
+  'models.enabledCount': '已启用 {on} 个 · 共 {all} 个',
+  'models.selectAll': '全选',
+  'models.selectNone': '全不选',
+  'models.search': '按名称或 model_id 搜索',
+  'models.rowMeta': '上下文 {context} · 输出 {output} · 思考 {think}',
+  'models.thinkNone': '不支持',
+  'models.contextCap': '显示上下文',
+  'models.contextCapHint': '只影响 DSH 里显示的上下文上限，往小调会让 DSH 更早压缩；网关真实上限不变。',
+  'models.contextGateway': '网关值 {v}',
+  'models.save': '保存',
+  'models.saving': '保存中…',
+  'models.saved': '已保存',
+  'models.savedLive': '已保存，模型选择器已更新',
+  'models.dirty': '有未保存的改动',
+  'models.applyUnavailable': '选择已保存，但当前宿主不支持即时应用；重启 DSH 后生效。',
+  'models.applyFailed': '选择已保存，但应用失败',
+  'models.saveFail': '保存失败',
+  'models.empty': '没有匹配的模型',
   'models.visionHint': '码道网关是否为该模型开放图片输入。注意：桥接目前只转发文本，图片会在请求构造阶段被丢弃，因此现在不能真的发图。',
   'models.visionYes': '网关支持图片输入（桥接暂只转发文本）',
   'models.visionNo': '网关不支持图片输入',
@@ -129,6 +158,7 @@ const en: Record<string, string> = {
   'meta.title': 'CodeArts Connector',
   'meta.desc': 'Bring Huawei Cloud CodeArts Agent models into DSH',
   'tab.account': 'Account',
+  'tab.interface': 'Interface',
   'tab.models': 'Models',
   'tab.diagnostics': 'Diagnostics',
   'tab.about': 'About',
@@ -184,6 +214,17 @@ const en: Record<string, string> = {
   'checkin.allGot': 'Claimed {n} campaign(s)',
   'checkin.allNone': 'Nothing to claim',
   'checkin.expiring': 'Credits expiring soon',
+  'checkin.auto': 'Auto check-in',
+  'checkin.autoHint':
+    'When on, the plugin checks once a minute and claims the daily reward as soon as it is available (at most one attempt every 15 minutes). Off by default.',
+  'checkin.autoLast': 'Last: ',
+  'checkin.autoIdle': 'Has not run yet; it will check shortly.',
+  'ui.hint': 'These switches take effect immediately — no DSH restart needed.',
+  'ui.chipSection': 'Composer status chip',
+  'ui.composerChip': 'Show the CodeArts status chip in the composer',
+  'ui.composerChipHint':
+    'When off, the small “● CodeArts” chip beside the composer is hidden. Account and credits stay available on this page.',
+  'ui.saveFail': 'Save failed',
   'models.title': 'Available models',
   'models.hint': '{n} models from the CodeArts gateway.',
   'models.name': 'Name',
@@ -193,6 +234,24 @@ const en: Record<string, string> = {
   'models.ratioHint': 'Credit multiplier vs. baseline price; lower is cheaper',
   'models.think': 'Thinking',
   'models.thinkHint': 'Thinking strengths offered by CodeArts. Note: the gateway chat endpoint does not forward a strength parameter (every field name and model-id variant probed was ignored), so these levels currently affect display only, not upstream behaviour.',
+  'models.enabledCount': '{on} of {all} enabled',
+  'models.selectAll': 'Select all',
+  'models.selectNone': 'Select none',
+  'models.search': 'Search by name or model_id',
+  'models.rowMeta': 'Context {context} · Output {output} · Thinking {think}',
+  'models.thinkNone': 'none',
+  'models.contextCap': 'Shown context',
+  'models.contextCapHint': 'Caps the context DSH displays; a lower value makes DSH compact earlier. The gateway limit is unchanged.',
+  'models.contextGateway': 'Gateway {v}',
+  'models.save': 'Save',
+  'models.saving': 'Saving…',
+  'models.saved': 'Saved',
+  'models.savedLive': 'Saved — the model picker is updated',
+  'models.dirty': 'Unsaved changes',
+  'models.applyUnavailable': 'Saved, but this host cannot apply it live; restart DSH to apply.',
+  'models.applyFailed': 'Saved, but applying failed',
+  'models.saveFail': 'Save failed',
+  'models.empty': 'No matching models',
   'models.visionHint': 'Whether the CodeArts gateway opens image input for this model. Note: the bridge forwards text only, so images are dropped when building the request.',
   'models.visionYes': 'Gateway supports images (bridge forwards text only)',
   'models.visionNo': 'Gateway: text only',
@@ -266,6 +325,42 @@ export function apply(ctx: any): void {
   // 只注册 plugins.bundle.config 一处 —— 同时注册 plugins.item 会让同一个
   // 面板在「内置插件配置」里出现两次（列表行 + 展开区），用户看到重复卡片。
   registerCard('plugins.bundle.config')
+
+  // 设置页左侧导航入口。
+  //
+  // `id` 同时驱动两件事：侧栏过滤与图标匹配 ——
+  // `settings.section.icon` 的 id 必须与这里的 id 完全一致，否则不渲染图标。
+  const SETTINGS_SECTION_ID = 'dsh-connect-madao'
+  try {
+    ctx.slots.inject('settings.section', () =>
+      ctx.slots.register(
+        {
+          name: 'settings.section',
+          id: SETTINGS_SECTION_ID,
+          order: 55,
+          label: () => t('meta.title'),
+          locale: namespace,
+          inject: () => ({ t, surface: 'settings' }),
+        },
+        CodeArtsPanel,
+      ),
+    )
+  } catch (err) {
+    console.error('[dsh-connect-madao] settings.section register failed:', err)
+  }
+
+  // 图标槽位是独立的一格，某些宿主版本可能没有；缺了只是退回默认齿轮，
+  // 页面本身照常出现，所以这里的失败不冒泡。
+  try {
+    ctx.slots.inject('settings.section.icon', () =>
+      ctx.slots.register(
+        { name: 'settings.section.icon', id: SETTINGS_SECTION_ID, locale: namespace },
+        SettingsSectionIcon,
+      ),
+    )
+  } catch (err) {
+    console.warn('[dsh-connect-madao] settings nav icon register failed (page unaffected):', err)
+  }
 
   // 输入框右侧状态胶囊
   try {
