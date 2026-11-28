@@ -2,6 +2,16 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 0.12.1 — 2026-11-28
+
+修一个只在 scoped 包名下出现的回归：设置页左侧的「码道连接器」入口不见了，
+模型页里那张卡片却还在。原因是客户端 bundle 的
+`window.__ModuleLoader__.load({ id })` 被硬编码成 `dsh-connect-madao`，而 DSH
+的客户端加载器用 **npm 包名**定位并应用模块；包名改成
+`@yzdys/dsh-connect-madao` 后 id 对不上，客户端插件就被跳过了。
+
+现在 id 从 `package.json` 的 `name` 读取，换 scope 不用再改构建脚本。
+
 ## 0.12.0 — 2026-11-27
 
 码道的 provider 改由插件**自带 adapter** 注册，不再复用 `llm-pi-ai` 的
