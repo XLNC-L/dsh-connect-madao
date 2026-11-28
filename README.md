@@ -1,4 +1,4 @@
-# @kaenfelix/dsh-connect-madao
+# @yzdys/dsh-connect-madao
 
 把华为云码道（CodeArts Agent）的模型接入 DeepSeek Harness。
 

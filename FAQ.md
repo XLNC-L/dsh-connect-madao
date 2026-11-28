@@ -210,7 +210,7 @@ failed to decode image: invalid or unsupported image format
 或者命令行：
 
 ```powershell
-pnpm --dir "%USERPROFILE%\.dsh\profiles\desktop" remove @kaenfelix/dsh-connect-madao
+pnpm --dir "%USERPROFILE%\.dsh\profiles\desktop" remove @yzdys/dsh-connect-madao
 ```
 
 **② 删掉插件的数据（可选）**

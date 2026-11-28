@@ -2,4 +2,4 @@
 # 模型不再写进 llm-pi-ai 配置，而是由插件自己的 adapter 在启动时提供。
 - insert:
     - id: dsh-connect-madao
-      name: '@kaenfelix/dsh-connect-madao'
+      name: '@yzdys/dsh-connect-madao'
